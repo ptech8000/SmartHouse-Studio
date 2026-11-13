@@ -4,7 +4,6 @@ import type {
   ConfigSnapshot,
   StoredAnnotation,
   VirtualWatchParticipantState,
-  CollaboratorLock,
   EnvironmentItem,
   EnvironmentDraftInput
 } from '../types';
@@ -30,9 +29,6 @@ import {
   fetchSessionSummaries,
   fetchNetworkInfo,
   fetchParticipantLinks,
-  fetchSessionLocks,
-  releaseSessionLock,
-  setSessionLockPolicy,
   fetchEnvironments,
   deleteEnvironment
 } from '../services/api';
@@ -50,8 +46,6 @@ import {
   Radio,
   CheckCircle2,
   FileText,
-  Lock,
-  Unlock,
   Layers,
   CopyPlus
 } from 'lucide-react';
@@ -65,7 +59,6 @@ interface AdminConsoleProps {
   onParticipantChange: (p: string) => void;
   config: ConfigSnapshot | null;
   annotations: StoredAnnotation[];
-  locks: CollaboratorLock[];
   onRefreshData: () => void;
   mustChangePassword?: boolean;
   onOpenPasswordModal?: () => void;
@@ -80,7 +73,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   onParticipantChange,
   config,
   annotations,
-  locks,
   onRefreshData,
   mustChangePassword = false,
   onOpenPasswordModal
@@ -96,7 +88,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const [fleet, setFleet] = useState<Record<string, VirtualWatchParticipantState>>({});
   const [filterParticipant, setFilterParticipant] = useState<string>('ALL');
   const [netInfo, setNetInfo] = useState<{ hostIp: string; protocol?: string; localUrl: string; networkUrl: string } | null>(null);
-  const [strictLock, setStrictLock] = useState<boolean>(false);
   const [participantTokens, setParticipantTokens] = useState<Record<string, string>>({});
 
   const showFeedback = (msg: string, variant: 'success' | 'error' | 'warning' | 'info' = 'success', title?: string) => {
@@ -124,15 +115,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     }
   };
 
-  const loadLockPolicy = async () => {
-    try {
-      const res = await fetchSessionLocks(currentSessionId);
-      setStrictLock(res.strictSessionLock);
-    } catch (e) {
-      // ignore
-    }
-  };
-
   useEffect(() => {
     loadSessions();
     loadEnvironments();
@@ -142,7 +124,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   }, []);
 
   useEffect(() => {
-    loadLockPolicy();
     fetchParticipantLinks(currentSessionId)
       .then(res => setParticipantTokens(res.tokens || {}))
       .catch(() => setParticipantTokens({}));
@@ -244,37 +225,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       onRefreshData();
     } catch (err: any) {
       showFeedback(`Error deleting session: ${err.message}`, 'error', 'Delete Failed');
-    }
-  };
-
-  const handleReleaseLock = async (takenPerson?: string) => {
-    try {
-      await releaseSessionLock(currentSessionId, takenPerson);
-      showFeedback(
-        takenPerson ? `Released lock on ${takenPerson}.` : 'All collaborator locks released!',
-        'success',
-        'Lock Updated'
-      );
-      onRefreshData();
-    } catch (err: any) {
-      showFeedback(`Failed to release lock: ${err.message}`, 'error', 'Unlock Failed');
-    }
-  };
-
-  const handleToggleLockPolicy = async () => {
-    try {
-      const next = !strictLock;
-      await setSessionLockPolicy(currentSessionId, next);
-      setStrictLock(next);
-      showFeedback(
-        next
-          ? 'Policy: Taken collaborators stay locked for entire session'
-          : 'Policy: Collaborators unlock when taker switches to Solo',
-        'info',
-        'Lock Policy Updated'
-      );
-    } catch (err: any) {
-      showFeedback(`Failed to update policy: ${err.message}`, 'error', 'Policy Error');
     }
   };
 
@@ -381,8 +331,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             <span>Annotations: <strong>{activeSessionObj?.annotation_count ?? annotations.length}</strong></span>
             <span>•</span>
             <span>Sensors: <strong>{activeSessionObj?.chunk_count ?? 0} chunks</strong></span>
-            <span>•</span>
-            <span>Active Locks: <strong>{locks.length}</strong></span>
           </div>
         </div>
 
@@ -621,58 +569,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 <strong>Works Across Any Network:</strong> Participants do not need to be on the same Wi-Fi — each link works over mobile data (4G/5G), separate Wi-Fi networks, or desktop browsers (Live Host: <code>{netInfo?.networkUrl || window.location.origin}</code>).
               </span>
             </div>
-          </section>
-
-          {/* Active Collaborator Locks / Exclusivity Monitor */}
-          <section className="pro-section">
-            <div className="section-head-pro">
-              <div>
-                <h3>3. Active Collaborator Exclusivity Locks</h3>
-                <p>When Person A takes Person B, Person B becomes locked so Person C cannot access them</p>
-              </div>
-              <div className="lock-controls-group">
-                <button
-                  className={`btn-ui ${strictLock ? 'btn-ui-amber' : 'btn-ui-secondary'}`}
-                  onClick={handleToggleLockPolicy}
-                  title="Toggle whether locks stay for the entire session or release when the participant submits Solo"
-                >
-                  <Lock size={14} />
-                  <span>{strictLock ? 'Mode: Strict Entire Session' : 'Mode: Release on Solo'}</span>
-                </button>
-                {locks.length > 0 && (
-                  <button className="btn-ui btn-ui-danger" onClick={() => handleReleaseLock()}>
-                    <Unlock size={14} />
-                    <span>Release All Locks</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {locks.length === 0 ? (
-              <div className="empty-state-box">
-                No active collaborator locks in session "{currentSessionId}". All residents are currently available.
-              </div>
-            ) : (
-              <div className="locks-grid">
-                {locks.map(l => (
-                  <div key={l.taken_person} className="lock-item-card">
-                    <div className="lock-item-info">
-                      <Lock size={16} className="lock-item-icon" />
-                      <div>
-                        <strong>{l.taken_person}</strong> is taken by <strong>{l.taken_by}</strong>
-                        <div className="lock-item-meta">Activity: {l.activity || 'Collaborative'}</div>
-                      </div>
-                    </div>
-                    <button
-                      className="btn-table btn-table-select"
-                      onClick={() => handleReleaseLock(l.taken_person)}
-                    >
-                      <Unlock size={12} /> Release
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
           </section>
         </div>
       )}

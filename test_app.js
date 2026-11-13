@@ -181,7 +181,65 @@ async function runTests() {
   db.deleteEnvironment(envId);
   console.log('✓ Custom Environment creation & session binding passed all checks');
 
-  console.log('\n🎉 ALL 6 TEST SUITES PASSED CLEANLY!\n');
+  // Test 7: Unrestricted Multi-Person Pairing (No Collaborator Locks)
+  console.log('\n[7/7] Testing Unrestricted Multi-Person Pairing...');
+  const pairSessId = 'PAIR_TEST_' + Date.now();
+  db.createSession(pairSessId, cfg.hash, cfg.snapshot, 'Europe/Paris');
+
+  const pairAB = db.saveAnnotation({
+    client_uuid: 'pair-ab-' + Date.now(),
+    session_id: pairSessId,
+    participant: 'Person_A',
+    timestamp_started: new Date(Date.now() - 4000).toISOString(),
+    timestamp_submitted: new Date().toISOString(),
+    location_id: 2,
+    location: 'living',
+    activity_id: 19,
+    activity: 'vacuuming living',
+    interaction: 'collaborative',
+    other_person: 'Person_B',
+    edited: 0,
+    config_version: cfg.hash
+  });
+  const pairAC = db.saveAnnotation({
+    client_uuid: 'pair-ac-' + Date.now(),
+    session_id: pairSessId,
+    participant: 'Person_A',
+    timestamp_started: new Date(Date.now() - 3000).toISOString(),
+    timestamp_submitted: new Date().toISOString(),
+    location_id: 2,
+    location: 'living',
+    activity_id: 19,
+    activity: 'vacuuming living',
+    interaction: 'collaborative',
+    other_person: 'Person_C',
+    edited: 0,
+    config_version: cfg.hash
+  });
+  const pairCB = db.saveAnnotation({
+    client_uuid: 'pair-cb-' + Date.now(),
+    session_id: pairSessId,
+    participant: 'Person_C',
+    timestamp_started: new Date(Date.now() - 2000).toISOString(),
+    timestamp_submitted: new Date().toISOString(),
+    location_id: 2,
+    location: 'living',
+    activity_id: 19,
+    activity: 'vacuuming living',
+    interaction: 'collaborative',
+    other_person: 'Person_B',
+    edited: 0,
+    config_version: cfg.hash
+  });
+  assert.strictEqual(pairAB.row.other_person, 'Person_B');
+  assert.strictEqual(pairAC.row.other_person, 'Person_C');
+  assert.strictEqual(pairCB.row.other_person, 'Person_B');
+  assert.strictEqual(db.getSessionLocks(pairSessId).length, 0, 'Session must not create collaborator locks');
+
+  db.deleteSession(pairSessId);
+  console.log('✓ Unrestricted multi-person pairing passed all checks');
+
+  console.log('\n🎉 ALL 7 TEST SUITES PASSED CLEANLY!\n');
 }
 
 runTests().catch(err => {

@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import type { LocationItem, ActivityItem, InteractionItem, ConfigSnapshot, SessionItem, StoredAnnotation, CollaboratorLock } from './types';
+import type { LocationItem, ActivityItem, InteractionItem, ConfigSnapshot, SessionItem, StoredAnnotation } from './types';
 import {
   fetchConfig,
   fetchSessions,
   postAnnotation,
   fetchAnnotations,
-  fetchSessionLocks,
   fetchAuthMe,
   logoutAdmin,
   setParticipantToken
@@ -61,7 +60,6 @@ export const App: React.FC = () => {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [currentSession, setCurrentSession] = useState<SessionItem | null>(null);
   const [participant, setParticipant] = useState<string>(initialRole);
-  const [locks, setLocks] = useState<CollaboratorLock[]>([]);
 
   // BLE and Outbox state
   const [bleState, setBleStatus] = useState<BleStreamState>({
@@ -87,9 +85,8 @@ export const App: React.FC = () => {
   const [hasEdited, setHasEdited] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  // Success & Error Feedback
+  // Success Feedback
   const [submitSuccessMsg, setSubmitSuccessMsg] = useState<string | null>(null);
-  const [conflictErrorMsg, setConflictErrorMsg] = useState<string | null>(null);
 
   // Progressive Connectivity & PWA Install State
   const [isOnline, setIsOnline] = useState<boolean>(
@@ -167,14 +164,10 @@ export const App: React.FC = () => {
     if (!isParticipantClient && !adminAuth?.authenticated) return;
     if (isParticipantClient && participantAccessDenied) return;
     try {
-      const [sessionList, locksRes] = await Promise.all([
-        fetchSessions(),
-        fetchSessionLocks(currentSession.id)
-      ]);
+      const sessionList = await fetchSessions();
       setSessions(sessionList);
       const updatedCurr = sessionList.find(s => s.id === currentSession.id);
       if (updatedCurr) setCurrentSession(updatedCurr);
-      setLocks(locksRes.locks || []);
 
       if (!isParticipantClient) {
         const list = await fetchAnnotations(currentSession.id);
@@ -271,7 +264,6 @@ export const App: React.FC = () => {
       setChosenPerson(null);
       setCurrentStep(5);
     } else {
-      refreshLiveState(); // Refresh locks right before showing Screen 4
       setCurrentStep(4);
     }
   };
@@ -302,7 +294,6 @@ export const App: React.FC = () => {
     }
 
     setIsSubmitting(true);
-    setConflictErrorMsg(null);
     const clientUuid = crypto.randomUUID();
     const tsSubmitted = getSynchronizedIso();
 
@@ -326,18 +317,13 @@ export const App: React.FC = () => {
       await enqueueAnnotation(payload);
 
       try {
-        const res = await postAnnotation(payload);
+        await postAnnotation(payload);
         await removeAnnotationFromOutbox(clientUuid);
-        if (res.locks) setLocks(res.locks);
       } catch (postErr: any) {
         if (postErr.status === 409) {
-          // Collaborator conflict: Person was already taken by someone else!
           await removeAnnotationFromOutbox(clientUuid);
           await refreshLiveState();
-          setConflictErrorMsg(postErr.message);
-          notify(postErr.message, 'warning', 'Collaborator Unavailable');
-          setChosenPerson(null);
-          setCurrentStep(4);
+          notify(postErr.message, 'warning', 'Session Stopped');
           setIsSubmitting(false);
           return;
         }
@@ -474,7 +460,6 @@ export const App: React.FC = () => {
               onParticipantChange={p => setParticipant(p)}
               config={config}
               annotations={annotations}
-              locks={locks}
               mustChangePassword={Boolean(adminAuth?.mustChangePassword)}
               onOpenPasswordModal={() => setShowPasswordModal(true)}
               onRefreshData={() => {
@@ -502,13 +487,6 @@ export const App: React.FC = () => {
                 <span className="mobile-frame-title">Activity Annotator</span>
                 <span className="mobile-frame-role">Role: <strong>{participant}</strong></span>
               </div>
-
-              {conflictErrorMsg && (
-                <div className="conflict-alert-banner">
-                  <Lock size={18} />
-                  <span>{conflictErrorMsg}</span>
-                </div>
-              )}
 
               {/* If session is stopped, show locked banner informing participant */}
               {currentSession && currentSession.status !== 'active' ? (
@@ -596,12 +574,11 @@ export const App: React.FC = () => {
                       />
                     )}
 
-                    {/* Screen 4: Person (Filtered to exclude active participant, shows locks for taken persons) */}
+                    {/* Screen 4: Person (Filtered to exclude active participant; all other roles remain selectable) */}
                     {currentStep === 4 && (
                       <Screen4Person
                         currentParticipant={participant}
                         allRoles={config.roles}
-                        locks={locks}
                         onSelect={handlePersonSelect}
                         selectedPerson={chosenPerson}
                       />

@@ -491,12 +491,12 @@ module.exports = {
     if (!token || typeof token !== 'string') return null;
     return stmtGetParticipantToken.get(token.trim()) || null;
   },
-  getSessionLocks(sessionId) {
-    return stmtGetSessionLocks.all(sessionId);
+  getSessionLocks(_sessionId) {
+    return [];
   },
   releaseLock(sessionId, takenPerson) {
     stmtDeleteLockForPerson.run(sessionId, takenPerson);
-    return stmtGetSessionLocks.all(sessionId);
+    return [];
   },
   releaseAllLocks(sessionId) {
     stmtDeleteLocksForSession.run(sessionId);
@@ -525,20 +525,11 @@ module.exports = {
         return { row: existing, isDuplicate: true };
       }
 
-      // Enforce Collaborator Lock Rule atomically inside transaction
       const otherPerson = data.other_person ? String(data.other_person).trim() : '';
-      if (otherPerson) {
-        if (otherPerson === data.participant) {
-          const err = new Error('Participant cannot select themselves as a collaborator.');
-          err.statusCode = 400;
-          throw err;
-        }
-        const existingLock = stmtGetLockForPerson.get(data.session_id, otherPerson);
-        if (existingLock && existingLock.taken_by !== data.participant) {
-          const err = new Error(`${otherPerson} is unavailable — already taken by ${existingLock.taken_by}!`);
-          err.statusCode = 409;
-          throw err;
-        }
+      if (otherPerson && otherPerson === data.participant) {
+        const err = new Error('Participant cannot select themselves as a collaborator.');
+        err.statusCode = 400;
+        throw err;
       }
 
       const nextSeq = stmtGetNextSeq.get(data.session_id, data.participant).next_seq;
@@ -561,24 +552,6 @@ module.exports = {
         data.edited ? 1 : 0,
         data.config_version
       );
-
-      // Update collaborator locks after successful save
-      const keepSessionLock =
-        data.keep_session_lock !== undefined
-          ? Boolean(data.keep_session_lock)
-          : Boolean(session.strict_session_lock);
-      if (!keepSessionLock) {
-        stmtDeleteLocksTakenBy.run(data.session_id, data.participant);
-      }
-      if (otherPerson) {
-        stmtUpsertLock.run(
-          data.session_id,
-          otherPerson,
-          data.participant,
-          data.activity || '',
-          tsReceived
-        );
-      }
 
       const saved = stmtGetAnnotationByClientUuid.get(data.client_uuid);
       db.exec('COMMIT');
