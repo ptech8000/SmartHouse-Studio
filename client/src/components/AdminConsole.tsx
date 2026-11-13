@@ -45,7 +45,6 @@ import {
   Trash2,
   Zap,
   ExternalLink,
-  Globe,
   Copy,
   Radio,
   CheckCircle2,
@@ -626,12 +625,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               })}
             </div>
 
-            <div className="lan-info-banner">
-              <Globe size={18} />
-              <span>
-                <strong>Works Across Any Network:</strong> Participants do not need to be on the same Wi-Fi — each link works over mobile data (4G/5G), separate Wi-Fi networks, or desktop browsers (Live Host: <code>{netInfo?.networkUrl || window.location.origin}</code>).
-              </span>
-            </div>
           </section>
         </div>
       )}
