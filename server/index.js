@@ -5,7 +5,7 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
-const { loadAndValidateConfig } = require('./configPipeline');
+const { loadAndValidateConfig, buildEnvironmentConfig } = require('./configPipeline');
 const db = require('./database');
 const { generateAnnotationsCsv } = require('./csvExport');
 const {
@@ -67,11 +67,25 @@ const bleStreamLimiter = createRateLimiter({
 // Cache config in memory
 let cachedConfig = loadAndValidateConfig();
 
-// Auto-seed initial default session S001 if no sessions exist
+function parseSessionSnapshot(session) {
+  if (session && session.config_snapshot) {
+    try {
+      return JSON.parse(session.config_snapshot);
+    } catch {
+      // fallback to cachedConfig
+    }
+  }
+  return cachedConfig.snapshot;
+}
+
+// Sync default environment and auto-seed initial default session S001 if no sessions exist
 try {
+  if (cachedConfig.valid) {
+    db.ensureDefaultEnvironment(cachedConfig.hash, cachedConfig.snapshot);
+  }
   const existing = db.listSessions();
   if (existing.length === 0 && cachedConfig.valid) {
-    db.createSession('S001', cachedConfig.hash, cachedConfig.snapshot, 'Europe/Paris');
+    db.createSession('S001', cachedConfig.hash, cachedConfig.snapshot, 'Europe/Paris', 'default-smart-house', 'Default Smart House');
     db.ensureParticipantTokens('S001', cachedConfig.snapshot.roles || ['Person_A', 'Person_B', 'Person_C']);
     console.log('[Database] Auto-seeded default session S001');
   }
@@ -292,15 +306,118 @@ app.get('/api/network-info', requireAdmin, (req, res) => {
 });
 
 app.get('/api/config', requireAdminOrParticipant, (req, res) => {
-  res.json(cachedConfig);
+  try {
+    const requestedSessionId = req.participantAuth
+      ? req.participantAuth.session_id
+      : (typeof req.query?.session === 'string' && req.query.session.trim() ? req.query.session.trim() : null);
+
+    if (requestedSessionId) {
+      const session = db.getSession(requestedSessionId);
+      if (session) {
+        const snapshot = parseSessionSnapshot(session);
+        return res.json({
+          valid: true,
+          errors: [],
+          warnings: [],
+          hash: session.config_hash || snapshot?.hash || cachedConfig.hash,
+          environment_id: session.environment_id || 'default-smart-house',
+          environment_name: session.environment_name || 'Default Smart House',
+          snapshot
+        });
+      }
+      if (req.participantAuth) {
+        return res.status(404).json({ error: 'Session not found' });
+      }
+    }
+
+    const requestedEnvId = !req.participantAuth && typeof req.query?.environment_id === 'string' && req.query.environment_id.trim()
+      ? req.query.environment_id.trim()
+      : null;
+
+    if (requestedEnvId) {
+      const env = db.getEnvironment(requestedEnvId);
+      if (!env) return res.status(404).json({ error: 'Environment not found' });
+      return res.json({
+        valid: true,
+        errors: [],
+        warnings: [],
+        hash: env.config_hash,
+        environment_id: env.id,
+        environment_name: env.name,
+        snapshot: env.snapshot
+      });
+    }
+
+    res.json({
+      ...cachedConfig,
+      environment_id: 'default-smart-house',
+      environment_name: 'Default Smart House'
+    });
+  } catch (err) {
+    safeServerError(res, err, 'Failed to load configuration');
+  }
 });
 
 app.post('/api/config/reload', requireAdmin, apiWriteLimiter, (req, res) => {
   cachedConfig = loadAndValidateConfig();
+  if (cachedConfig.valid) {
+    db.ensureDefaultEnvironment(cachedConfig.hash, cachedConfig.snapshot);
+  }
   res.json({
     message: 'Configuration reloaded',
     ...cachedConfig
   });
+});
+
+// ==========================================================================
+// 2B. ENVIRONMENTS API (Admin only)
+// ==========================================================================
+
+app.get('/api/environments', requireAdmin, (req, res) => {
+  try {
+    res.json(db.listEnvironments());
+  } catch (err) {
+    safeServerError(res, err, 'Failed to list environments');
+  }
+});
+
+app.post('/api/environments', requireAdmin, apiWriteLimiter, (req, res) => {
+  try {
+    const built = buildEnvironmentConfig(req.body);
+    if (!built.valid) {
+      return res.status(400).json({ error: built.errors.join('; '), errors: built.errors, warnings: built.warnings });
+    }
+    const slug = built.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 32) || 'env';
+    const envId = `env_${slug}_${crypto.randomBytes(3).toString('hex')}`;
+    const created = db.createEnvironment({
+      id: envId,
+      name: built.name,
+      description: built.description,
+      configHash: built.hash,
+      configSnapshot: built.snapshot
+    });
+    res.status(201).json({ ...created, warnings: built.warnings });
+  } catch (err) {
+    safeServerError(res, err, 'Failed to create environment');
+  }
+});
+
+app.delete('/api/environments/:id', requireAdmin, apiWriteLimiter, (req, res) => {
+  try {
+    const env = db.getEnvironment(req.params.id);
+    if (!env) return res.status(404).json({ error: 'Environment not found' });
+    if (env.is_default) {
+      return res.status(400).json({ error: 'The built-in default environment cannot be deleted' });
+    }
+    db.deleteEnvironment(env.id);
+    res.json({ success: true, id: env.id });
+  } catch (err) {
+    safeServerError(res, err, 'Failed to delete environment');
+  }
 });
 
 // ==========================================================================
@@ -344,8 +461,28 @@ app.post('/api/sessions', requireAdmin, apiWriteLimiter, (req, res) => {
       ? req.body.timezone.trim().slice(0, 64)
       : 'Europe/Paris';
 
-    const session = db.createSession(sessCheck.value, cachedConfig.hash, cachedConfig.snapshot, timezone);
-    const roles = cachedConfig.snapshot?.roles || ['Person_A', 'Person_B', 'Person_C'];
+    const requestedEnvId = typeof req.body?.environment_id === 'string' && req.body.environment_id.trim()
+      ? req.body.environment_id.trim()
+      : null;
+
+    let envHash = cachedConfig.hash;
+    let envSnapshot = cachedConfig.snapshot;
+    let envId = 'default-smart-house';
+    let envName = 'Default Smart House';
+
+    if (requestedEnvId) {
+      const env = db.getEnvironment(requestedEnvId);
+      if (!env || !env.snapshot) {
+        return res.status(404).json({ error: `Environment "${requestedEnvId}" not found` });
+      }
+      envHash = env.config_hash;
+      envSnapshot = env.snapshot;
+      envId = env.id;
+      envName = env.name;
+    }
+
+    const session = db.createSession(sessCheck.value, envHash, envSnapshot, timezone, envId, envName);
+    const roles = envSnapshot?.roles || ['Person_A', 'Person_B', 'Person_C'];
     const tokens = db.ensureParticipantTokens(session.id, roles);
     res.status(201).json({ ...session, participantTokens: tokens });
   } catch (err) {
@@ -428,7 +565,7 @@ app.post('/api/test/generate-annotation', requireAdmin, apiWriteLimiter, (req, r
     const session = db.getSession(sId);
     if (!session) return res.status(404).json({ error: `Session "${sId}" not found` });
 
-    const snap = cachedConfig.snapshot;
+    const snap = parseSessionSnapshot(session);
     const roles = snap.roles || ['Person_A', 'Person_B', 'Person_C'];
     const part = roles.includes(participant) ? participant : roles[0];
 
@@ -604,7 +741,8 @@ app.post('/api/ble/sensor-chunks', requireAdminOrParticipant, bleStreamLimiter, 
       return res.status(409).json({ error: 'Cannot ingest telemetry for a stopped session' });
     }
 
-    const validation = validateSensorChunkPayload(rawBody, cachedConfig.snapshot, verifiedParticipant);
+    const snap = parseSessionSnapshot(session);
+    const validation = validateSensorChunkPayload(rawBody, snap, verifiedParticipant);
     if (!validation.valid) {
       return res.status(400).json({ error: validation.error });
     }

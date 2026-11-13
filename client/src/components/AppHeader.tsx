@@ -109,10 +109,10 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             <button
               className={`nav-tab-btn ${activeTab === 'config' ? 'tab-active' : ''}`}
               onClick={() => onTabChange('config')}
-              title="System Configuration & Integrity"
+              title="Environments, System Configuration & Integrity"
             >
               <Settings size={16} />
-              <span>Config</span>
+              <span>Environments</span>
             </button>
           </nav>
         )}

@@ -125,11 +125,32 @@ db.exec(`
     UNIQUE(session_id, participant),
     FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS environments (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    config_hash TEXT NOT NULL,
+    config_snapshot TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `);
 
-// Safe migration for pre-existing databases lacking strict_session_lock
+// Safe migrations for pre-existing databases
 try {
   db.exec('ALTER TABLE sessions ADD COLUMN strict_session_lock INTEGER NOT NULL DEFAULT 0');
+} catch {
+  // Column already exists
+}
+try {
+  db.exec("ALTER TABLE sessions ADD COLUMN environment_id TEXT DEFAULT 'default-smart-house'");
+} catch {
+  // Column already exists
+}
+try {
+  db.exec("ALTER TABLE sessions ADD COLUMN environment_name TEXT DEFAULT 'Default Smart House'");
 } catch {
   // Column already exists
 }
@@ -155,11 +176,27 @@ if (!adminCountRow || adminCountRow.cnt === 0) {
 
 // Prepared statement caches
 const stmtGetSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
-const stmtListSessions = db.prepare('SELECT id, config_hash, status, timezone, started_at, ended_at, strict_session_lock FROM sessions ORDER BY started_at DESC');
+const stmtListSessions = db.prepare('SELECT id, config_hash, status, timezone, started_at, ended_at, strict_session_lock, environment_id, environment_name FROM sessions ORDER BY started_at DESC');
 const stmtCreateSession = db.prepare(`
-  INSERT INTO sessions (id, config_hash, config_snapshot, status, timezone, started_at)
-  VALUES (?, ?, ?, 'active', ?, ?)
+  INSERT INTO sessions (id, config_hash, config_snapshot, status, timezone, started_at, environment_id, environment_name)
+  VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
 `);
+
+const stmtListEnvironments = db.prepare('SELECT id, name, description, config_hash, config_snapshot, is_default, created_at, updated_at FROM environments ORDER BY is_default DESC, created_at DESC');
+const stmtGetEnvironment = db.prepare('SELECT * FROM environments WHERE id = ?');
+const stmtUpsertDefaultEnvironment = db.prepare(`
+  INSERT INTO environments (id, name, description, config_hash, config_snapshot, is_default, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET
+    config_hash = excluded.config_hash,
+    config_snapshot = excluded.config_snapshot,
+    updated_at = excluded.updated_at
+`);
+const stmtInsertEnvironment = db.prepare(`
+  INSERT INTO environments (id, name, description, config_hash, config_snapshot, is_default, created_at, updated_at)
+  VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+`);
+const stmtDeleteEnvironment = db.prepare('DELETE FROM environments WHERE id = ? AND is_default = 0');
 const stmtStartSession = db.prepare(`
   UPDATE sessions 
   SET status = 'active', 
@@ -279,6 +316,8 @@ const stmtSessionSummary = db.prepare(`
     s.started_at,
     s.ended_at,
     s.config_hash,
+    COALESCE(s.environment_id, 'default-smart-house') AS environment_id,
+    COALESCE(s.environment_name, 'Default Smart House') AS environment_name,
     (SELECT COUNT(*) FROM annotations a WHERE a.session_id = s.id) AS annotation_count,
     (SELECT COUNT(*) FROM sensor_chunks c WHERE c.session_id = s.id) AS chunk_count,
     (SELECT GROUP_CONCAT(DISTINCT a.participant) FROM annotations a WHERE a.session_id = s.id) AS active_participants
@@ -288,6 +327,68 @@ const stmtSessionSummary = db.prepare(`
 
 module.exports = {
   db,
+  ensureDefaultEnvironment(configHash, configSnapshot) {
+    const now = new Date().toISOString();
+    stmtUpsertDefaultEnvironment.run(
+      'default-smart-house',
+      'Default Smart House',
+      'Built-in PRD Smart House configuration (3 residents, 11 rooms)',
+      configHash,
+      JSON.stringify(configSnapshot),
+      now,
+      now
+    );
+    return stmtGetEnvironment.get('default-smart-house');
+  },
+  listEnvironments() {
+    return stmtListEnvironments.all().map(row => {
+      let snapshot = null;
+      try {
+        snapshot = JSON.parse(row.config_snapshot);
+      } catch {
+        snapshot = null;
+      }
+      return {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        config_hash: row.config_hash,
+        is_default: Boolean(row.is_default),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        snapshot
+      };
+    });
+  },
+  getEnvironment(id) {
+    const row = stmtGetEnvironment.get(id);
+    if (!row) return null;
+    let snapshot = null;
+    try {
+      snapshot = JSON.parse(row.config_snapshot);
+    } catch {
+      snapshot = null;
+    }
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      config_hash: row.config_hash,
+      is_default: Boolean(row.is_default),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      snapshot
+    };
+  },
+  createEnvironment({ id, name, description = '', configHash, configSnapshot }) {
+    const now = new Date().toISOString();
+    stmtInsertEnvironment.run(id, name, description, configHash, JSON.stringify(configSnapshot), now, now);
+    return this.getEnvironment(id);
+  },
+  deleteEnvironment(id) {
+    const info = stmtDeleteEnvironment.run(id);
+    return { deleted: info.changes > 0, id };
+  },
   getSession(id) {
     return stmtGetSession.get(id);
   },
@@ -297,9 +398,9 @@ module.exports = {
   getSessionSummaries() {
     return stmtSessionSummary.all();
   },
-  createSession(id, configHash, configSnapshot, timezone = 'Europe/Paris') {
+  createSession(id, configHash, configSnapshot, timezone = 'Europe/Paris', environmentId = 'default-smart-house', environmentName = 'Default Smart House') {
     const startedAt = new Date().toISOString();
-    stmtCreateSession.run(id, configHash, JSON.stringify(configSnapshot), timezone, startedAt);
+    stmtCreateSession.run(id, configHash, JSON.stringify(configSnapshot), timezone, startedAt, environmentId, environmentName);
     return stmtGetSession.get(id);
   },
   startSession(id) {

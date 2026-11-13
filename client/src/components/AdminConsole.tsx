@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import type { SessionSummaryItem, ConfigSnapshot, StoredAnnotation, VirtualWatchParticipantState, CollaboratorLock } from '../types';
+import type {
+  SessionSummaryItem,
+  ConfigSnapshot,
+  StoredAnnotation,
+  VirtualWatchParticipantState,
+  CollaboratorLock,
+  EnvironmentItem,
+  EnvironmentDraftInput
+} from '../types';
 import type { MainTabType } from './AppHeader';
 import { SensorWaveform } from './SensorWaveform';
+import { EnvironmentBuilderModal, snapshotToDraft } from './EnvironmentBuilderModal';
 import { useNotify } from './InAppNotifications';
 import {
   subscribeVirtualFleet,
@@ -23,7 +32,9 @@ import {
   fetchParticipantLinks,
   fetchSessionLocks,
   releaseSessionLock,
-  setSessionLockPolicy
+  setSessionLockPolicy,
+  fetchEnvironments,
+  deleteEnvironment
 } from '../services/api';
 import {
   Download,
@@ -40,13 +51,16 @@ import {
   CheckCircle2,
   FileText,
   Lock,
-  Unlock
+  Unlock,
+  Layers,
+  CopyPlus
 } from 'lucide-react';
 
 interface AdminConsoleProps {
   currentSessionId: string;
   activeTab: MainTabType;
   onSelectSession: (sId: string) => void;
+  onTabChange?: (tab: MainTabType) => void;
   currentParticipant: string;
   onParticipantChange: (p: string) => void;
   config: ConfigSnapshot | null;
@@ -61,6 +75,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   currentSessionId,
   activeTab,
   onSelectSession,
+  onTabChange,
   currentParticipant,
   onParticipantChange,
   config,
@@ -72,6 +87,10 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 }) => {
   const { notify, confirmDialog } = useNotify();
   const [sessions, setSessions] = useState<SessionSummaryItem[]>([]);
+  const [environments, setEnvironments] = useState<EnvironmentItem[]>([]);
+  const [selectedEnvId, setSelectedEnvId] = useState<string>('default-smart-house');
+  const [showEnvBuilder, setShowEnvBuilder] = useState<boolean>(false);
+  const [envBuilderDraft, setEnvBuilderDraft] = useState<EnvironmentDraftInput | null>(null);
   const [newSessionId, setNewSessionId] = useState('');
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [fleet, setFleet] = useState<Record<string, VirtualWatchParticipantState>>({});
@@ -93,6 +112,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     }
   };
 
+  const loadEnvironments = async () => {
+    try {
+      const envs = await fetchEnvironments();
+      setEnvironments(envs);
+      if (envs.length > 0 && !envs.some(e => e.id === selectedEnvId)) {
+        setSelectedEnvId(envs[0].id);
+      }
+    } catch (e) {
+      console.warn('Failed to load environments:', e);
+    }
+  };
+
   const loadLockPolicy = async () => {
     try {
       const res = await fetchSessionLocks(currentSessionId);
@@ -104,6 +135,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 
   useEffect(() => {
     loadSessions();
+    loadEnvironments();
     fetchNetworkInfo().then(setNetInfo).catch(() => {});
     const unsub = subscribeVirtualFleet(f => setFleet(f));
     return () => unsub();
@@ -129,9 +161,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     if (!newSessionId.trim()) return;
     try {
       setIsCreatingSession(true);
-      const created = await createSession(newSessionId.trim());
+      const created = await createSession(newSessionId.trim(), 'Europe/Paris', selectedEnvId);
       setNewSessionId('');
-      showFeedback(`Session "${created.id}" created! Share the participant links below.`);
+      showFeedback(
+        `Session "${created.id}" created using "${created.environment_name || 'Default Smart House'}"!`,
+        'success',
+        'Session Created'
+      );
       await loadSessions();
       onSelectSession(created.id);
       onRefreshData();
@@ -139,6 +175,28 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       showFeedback(`Error creating session: ${err.message}`, 'error', 'Create Session Failed');
     } finally {
       setIsCreatingSession(false);
+    }
+  };
+
+  const handleDeleteEnvironment = async (env: EnvironmentItem) => {
+    const confirmed = await confirmDialog({
+      title: `Delete Environment "${env.name}"?`,
+      message: `Existing sessions already using this environment keep their frozen configuration snapshot, but "${env.name}" will be removed from the environment selector.`,
+      confirmLabel: 'Delete Environment',
+      cancelLabel: 'Cancel',
+      variant: 'danger'
+    });
+    if (!confirmed) return;
+
+    try {
+      await deleteEnvironment(env.id);
+      showFeedback(`Environment "${env.name}" deleted.`, 'info', 'Environment Deleted');
+      if (selectedEnvId === env.id) {
+        setSelectedEnvId('default-smart-house');
+      }
+      await loadEnvironments();
+    } catch (err: any) {
+      showFeedback(`Error deleting environment: ${err.message}`, 'error', 'Delete Failed');
     }
   };
 
@@ -224,26 +282,29 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     try {
       const res = await reloadConfig();
       showFeedback(`Config reloaded (Hash: ${res.hash.substring(0, 8)})`, 'success', 'Config Reloaded');
+      await loadEnvironments();
       onRefreshData();
     } catch (err: any) {
       showFeedback(`Error reloading config: ${err.message}`, 'error', 'Reload Failed');
     }
   };
 
-  const handleQuickInjectAnnotation = async (locName: string, actName: string, interaction = 'solo') => {
+  const handleQuickInjectAnnotation = async (locId: number, actId: number, interaction = 'solo') => {
     if (!config) return;
     try {
-      const loc = config.locations.find(l => l.name.toLowerCase().includes(locName.toLowerCase())) || config.locations[0];
+      const loc = config.locations.find(l => l.id === locId) || config.locations[0];
       const validActs = config.locationActivitiesMap[loc.id] || config.activities;
-      const act = validActs.find(a => a.name.toLowerCase().includes(actName.toLowerCase())) || validActs[0];
+      const act = validActs.find(a => a.id === actId) || validActs[0];
+      const otherPerson = interaction !== 'solo' ? (config.roles.find(r => r !== currentParticipant) || '') : '';
+      const resolvedInteraction = otherPerson ? interaction : 'solo';
 
       await generateTestAnnotation({
         session_id: currentSessionId,
         participant: currentParticipant,
         location_id: loc.id,
         activity_id: act.id,
-        interaction,
-        other_person: interaction !== 'solo' ? (config.roles.find(r => r !== currentParticipant) || 'Person_B') : ''
+        interaction: resolvedInteraction,
+        other_person: otherPerson
       });
 
       showFeedback(`Injected test: ${loc.shortLabel} / ${act.shortLabel} (${currentParticipant})`, 'success', 'Test Annotation Saved');
@@ -304,6 +365,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             <span className={`status-pill ${isSessionActive ? 'pill-active' : 'pill-ended'}`}>
               {isSessionActive ? '● RUNNING' : '■ STOPPED'}
             </span>
+            <span className="env-pill-badge">
+              <Layers size={12} /> {activeSessionObj?.environment_name || 'Default Smart House'}
+            </span>
             <span className="live-poll-badge">
               <Radio size={12} className="live-pulse-icon" /> Live Sync Active
             </span>
@@ -311,6 +375,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           <h2 className="hero-session-name">{currentSessionId}</h2>
           <div className="hero-meta-row">
             <span>Started: <strong>{activeSessionObj ? new Date(activeSessionObj.started_at).toLocaleTimeString() : '—'}</strong></span>
+            <span>•</span>
+            <span>Environment: <strong>{activeSessionObj?.environment_name || 'Default Smart House'}</strong></span>
             <span>•</span>
             <span>Annotations: <strong>{activeSessionObj?.annotation_count ?? annotations.length}</strong></span>
             <span>•</span>
@@ -354,12 +420,25 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             <div className="section-head-pro">
               <div>
                 <h3>1. Create & Manage Experiment Sessions</h3>
-                <p>Create a new session first, start recording, and share the generated live URLs below with each resident</p>
+                <p>Pick an environment (or create a new one), launch a session, and share the generated participant URLs below</p>
               </div>
-              <button className="btn-ui btn-ui-secondary" onClick={() => { loadSessions(); onRefreshData(); }}>
-                <RefreshCw size={14} />
-                <span>Refresh</span>
-              </button>
+              <div className="section-head-actions">
+                <button
+                  type="button"
+                  className="btn-ui btn-ui-soft-blue"
+                  onClick={() => {
+                    setEnvBuilderDraft(null);
+                    setShowEnvBuilder(true);
+                  }}
+                >
+                  <Layers size={14} />
+                  <span>New Environment</span>
+                </button>
+                <button className="btn-ui btn-ui-secondary" onClick={() => { loadSessions(); loadEnvironments(); onRefreshData(); }}>
+                  <RefreshCw size={14} />
+                  <span>Refresh</span>
+                </button>
+              </div>
             </div>
 
             {/* Create Session Bar */}
@@ -371,6 +450,22 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 onChange={e => setNewSessionId(e.target.value)}
                 className="ui-input"
               />
+              <select
+                className="ui-select env-select-input"
+                value={selectedEnvId}
+                onChange={e => setSelectedEnvId(e.target.value)}
+                aria-label="Select environment for new session"
+              >
+                {environments.length === 0 ? (
+                  <option value="default-smart-house">Default Smart House</option>
+                ) : (
+                  environments.map(env => (
+                    <option key={env.id} value={env.id}>
+                      {env.name} ({env.snapshot?.roles?.length || 0} roles, {env.snapshot?.locations?.length || 0} rooms)
+                    </option>
+                  ))
+                )}
+              </select>
               <button type="submit" className="btn-ui btn-ui-primary" disabled={isCreatingSession}>
                 <PlusCircle size={16} />
                 <span>Create Session</span>
@@ -382,6 +477,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 <thead>
                   <tr>
                     <th>Session ID</th>
+                    <th>Environment</th>
                     <th>Status</th>
                     <th>Started</th>
                     <th>Annotations</th>
@@ -400,6 +496,11 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                             <strong>{s.id}</strong>
                             {isSelected && <span className="current-badge">ACTIVE TARGET</span>}
                           </div>
+                        </td>
+                        <td>
+                          <span className="badge-env-cell">
+                            <Layers size={12} /> {s.environment_name || 'Default Smart House'}
+                          </span>
                         </td>
                         <td>
                           <span className={`status-pill ${s.status === 'active' ? 'pill-active' : 'pill-ended'}`}>
@@ -768,24 +869,41 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             </div>
 
             <div className="quick-inject-buttons">
-              <button className="btn-quick-inject" onClick={() => handleQuickInjectAnnotation('living', 'operating TV', 'solo')}>
-                + Living: TV (Solo)
-              </button>
-              <button className="btn-quick-inject" onClick={() => handleQuickInjectAnnotation('living', 'vacuuming living', 'solo')}>
-                + Living: Vacuum (Solo)
-              </button>
-              <button className="btn-quick-inject" onClick={() => handleQuickInjectAnnotation('living', 'resting on the couch', 'collaborative')}>
-                + Living: Couch (Collab)
-              </button>
-              <button className="btn-quick-inject" onClick={() => handleQuickInjectAnnotation('kitchen', 'preparing meal', 'solo')}>
-                + Kitchen: Cooking (Solo)
-              </button>
-              <button className="btn-quick-inject" onClick={() => handleQuickInjectAnnotation('stairs', 'climbing stairs', 'solo')}>
-                + Stairs: Ascending (Solo)
-              </button>
-              <button className="btn-quick-inject" onClick={() => handleQuickInjectAnnotation('front door', 'entering house', 'solo')}>
-                + Front Door: Enter (Solo)
-              </button>
+              {(() => {
+                const samples: Array<{ locId: number; actId: number; label: string; interaction: string }> = [];
+                for (const loc of config?.locations || []) {
+                  const acts = config?.locationActivitiesMap?.[loc.id] || [];
+                  for (const act of acts) {
+                    if (samples.length < 5) {
+                      samples.push({
+                        locId: loc.id,
+                        actId: act.id,
+                        label: `+ ${loc.shortLabel || loc.name}: ${act.shortLabel || act.name} (Solo)`,
+                        interaction: 'solo'
+                      });
+                    }
+                  }
+                  if (samples.length >= 5) break;
+                }
+                if (samples.length > 0 && roles.length >= 2) {
+                  const first = samples[0];
+                  samples.push({
+                    locId: first.locId,
+                    actId: first.actId,
+                    label: `${first.label.replace(' (Solo)', '')} (Collab)`,
+                    interaction: 'collaborative'
+                  });
+                }
+                return samples.map((item, idx) => (
+                  <button
+                    key={`${item.locId}-${item.actId}-${item.interaction}-${idx}`}
+                    className="btn-quick-inject"
+                    onClick={() => handleQuickInjectAnnotation(item.locId, item.actId, item.interaction)}
+                  >
+                    {item.label}
+                  </button>
+                ));
+              })()}
             </div>
           </section>
 
@@ -859,19 +977,111 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       )}
 
       {/* ============================================================== */}
-      {/* MODULE 4: CONFIGURATION & SYSTEM INTEGRITY                     */}
+      {/* MODULE 4: ENVIRONMENTS & CONFIGURATION INTEGRITY               */}
       {/* ============================================================== */}
       {activeTab === 'config' && (
         <div className="tab-module-content">
+          {/* Environments Library & Builder */}
           <section className="pro-section">
             <div className="section-head-pro">
               <div>
-                <h3>Configuration & Data Integrity</h3>
-                <p>Active frozen snapshot and integrity checks from the 4 JSON files + sensors.json</p>
+                <h3>Environments Library ({environments.length})</h3>
+                <p>Create custom smart environments with your own rooms, activities, and resident roles</p>
+              </div>
+              <button
+                type="button"
+                className="btn-ui btn-ui-primary"
+                onClick={() => {
+                  setEnvBuilderDraft(null);
+                  setShowEnvBuilder(true);
+                }}
+              >
+                <PlusCircle size={15} />
+                <span>Create New Environment</span>
+              </button>
+            </div>
+
+            <div className="env-cards-grid">
+              {environments.map(env => (
+                <div key={env.id} className={`env-library-card ${env.id === selectedEnvId ? 'env-selected' : ''}`}>
+                  <div className="env-card-top">
+                    <div>
+                      <div className="env-card-badges">
+                        <span className={`status-pill ${env.is_default ? 'pill-blue' : 'pill-active'}`}>
+                          {env.is_default ? 'BUILT-IN' : 'CUSTOM'}
+                        </span>
+                      </div>
+                      <h4 className="env-card-title">{env.name}</h4>
+                    </div>
+                    {!env.is_default && (
+                      <button
+                        type="button"
+                        className="btn-table btn-table-delete"
+                        onClick={() => handleDeleteEnvironment(env)}
+                        title={`Delete environment ${env.name}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
+
+                  {env.description && <p className="env-card-desc">{env.description}</p>}
+
+                  <div className="env-card-stats">
+                    <span><strong>{env.snapshot?.roles?.length || 0}</strong> roles</span>
+                    <span>•</span>
+                    <span><strong>{env.snapshot?.locations?.length || 0}</strong> rooms</span>
+                    <span>•</span>
+                    <span><strong>{env.snapshot?.activities?.length || 0}</strong> activities</span>
+                  </div>
+
+                  <div className="env-card-roles">
+                    {(env.snapshot?.roles || []).map(r => (
+                      <span key={r} className="badge-participant">{r}</span>
+                    ))}
+                  </div>
+
+                  <div className="env-card-actions">
+                    <button
+                      type="button"
+                      className="btn-ui btn-ui-soft-blue"
+                      onClick={() => {
+                        setSelectedEnvId(env.id);
+                        onTabChange?.('sessions');
+                        showFeedback(`Selected "${env.name}" for your next session.`, 'info', 'Environment Selected');
+                      }}
+                    >
+                      <Play size={13} />
+                      <span>Use for New Session</span>
+                    </button>
+                    {env.snapshot && (
+                      <button
+                        type="button"
+                        className="btn-ui btn-ui-secondary"
+                        onClick={() => {
+                          setEnvBuilderDraft(snapshotToDraft(env.snapshot, `${env.name} Copy`));
+                          setShowEnvBuilder(true);
+                        }}
+                      >
+                        <CopyPlus size={13} />
+                        <span>Clone & Edit</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className="pro-section">
+            <div className="section-head-pro">
+              <div>
+                <h3>Active Session Snapshot & Data Integrity ({currentSessionId})</h3>
+                <p>Frozen configuration snapshot active in session "{currentSessionId}" ({activeSessionObj?.environment_name || 'Default Smart House'})</p>
               </div>
               <button className="btn-ui btn-ui-secondary" onClick={handleReloadConfig}>
                 <RefreshCw size={14} />
-                <span>Reload Config</span>
+                <span>Reload Default JSONs</span>
               </button>
             </div>
 
@@ -886,11 +1096,11 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               </div>
               <div className="config-metric">
                 <span className="cfg-lbl">Activities Configured</span>
-                <strong>{config?.activities?.length || 0} activities (with vacuuming)</strong>
+                <strong>{config?.activities?.length || 0} activities</strong>
               </div>
               <div className="config-metric">
                 <span className="cfg-lbl">Residents</span>
-                <strong>{config?.residentNumber || 3} ({config?.roles?.join(', ')})</strong>
+                <strong>{config?.residentNumber || 0} ({config?.roles?.join(', ')})</strong>
               </div>
             </div>
           </section>
@@ -898,8 +1108,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           <section className="pro-section">
             <div className="section-head-pro">
               <div>
-                <h3>Configuration File Manifest</h3>
-                <p>Loaded from the smart house experiment directory</p>
+                <h3>Default File Manifest (Built-In Smart House)</h3>
+                <p>Base JSON templates loaded from the repository root</p>
               </div>
             </div>
 
@@ -908,7 +1118,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 <FileText size={18} className="file-icon" />
                 <div>
                   <strong>scenario.json</strong>
-                  <p>Defines resident count ({config?.residentNumber}) and role names ({config?.roles.join(', ')})</p>
+                  <p>Active session roles: {config?.roles.join(', ')} ({config?.residentNumber} total)</p>
                 </div>
                 <CheckCircle2 size={18} className="file-ok-icon" />
               </div>
@@ -926,7 +1136,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 <FileText size={18} className="file-icon" />
                 <div>
                   <strong>activities.json & activities_location.json</strong>
-                  <p>{config?.activities.length} activities mapped to rooms (including vacuuming)</p>
+                  <p>{config?.activities.length} activities mapped to rooms</p>
                 </div>
                 <CheckCircle2 size={18} className="file-ok-icon" />
               </div>
@@ -943,6 +1153,17 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           </section>
         </div>
       )}
+
+      <EnvironmentBuilderModal
+        isOpen={showEnvBuilder}
+        initialDraft={envBuilderDraft}
+        currentConfig={config}
+        onClose={() => setShowEnvBuilder(false)}
+        onCreated={async createdEnv => {
+          await loadEnvironments();
+          setSelectedEnvId(createdEnv.id);
+        }}
+      />
     </div>
   );
 };

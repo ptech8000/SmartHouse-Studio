@@ -43,6 +43,32 @@ export interface SessionItem {
   timezone: string;
   started_at: string;
   ended_at?: string;
+  environment_id?: string;
+  environment_name?: string;
+}
+
+export interface EnvironmentLocationDraft {
+  name: string;
+  shortLabel?: string;
+  activities: string[];
+}
+
+export interface EnvironmentDraftInput {
+  name: string;
+  description?: string;
+  roles: string[];
+  locations: EnvironmentLocationDraft[];
+}
+
+export interface EnvironmentItem {
+  id: string;
+  name: string;
+  description: string;
+  config_hash: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+  snapshot: ConfigSnapshot;
 }
 
 export interface SessionSummaryItem extends SessionItem {

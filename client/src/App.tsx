@@ -126,16 +126,9 @@ export const App: React.FC = () => {
         }
       }
 
-      const cfgRes = await fetchConfig();
-      if (cfgRes.snapshot) {
-        setConfig(cfgRes.snapshot);
-        if (!roleParam && cfgRes.snapshot.roles?.length && !cfgRes.snapshot.roles.includes(participant)) {
-          setParticipant(cfgRes.snapshot.roles[0]);
-        }
-      }
-
       const sessionList = await fetchSessions();
       setSessions(sessionList);
+      let targetSessionId: string | undefined = initialSession || undefined;
       if (sessionList.length > 0) {
         let target = sessionList[0];
         if (me.role === 'participant' && me.session_id) {
@@ -147,8 +140,17 @@ export const App: React.FC = () => {
         } else {
           target = sessionList.find(s => s.status === 'active') || sessionList[0];
         }
+        targetSessionId = target.id;
         setCurrentSession(target);
         setBleSessionContext(target.id, me.participant || participant);
+      }
+
+      const cfgRes = await fetchConfig(targetSessionId);
+      if (cfgRes.snapshot) {
+        setConfig(cfgRes.snapshot);
+        if (!roleParam && cfgRes.snapshot.roles?.length && !cfgRes.snapshot.roles.includes(participant)) {
+          setParticipant(cfgRes.snapshot.roles[0]);
+        }
       }
     } catch (err: any) {
       setAuthChecked(true);
@@ -443,7 +445,7 @@ export const App: React.FC = () => {
             <AdminConsole
               currentSessionId={currentSession?.id || 'S001'}
               activeTab={activeTab}
-              onSelectSession={sId => {
+              onSelectSession={async sId => {
                 const target = sessions.find(s => s.id === sId) || {
                   id: sId,
                   config_hash: config?.hash || '',
@@ -452,8 +454,22 @@ export const App: React.FC = () => {
                   started_at: new Date().toISOString()
                 };
                 setCurrentSession(target);
+                try {
+                  const cfgRes = await fetchConfig(sId);
+                  if (cfgRes.snapshot) {
+                    setConfig(cfgRes.snapshot);
+                    const nextRoles = cfgRes.snapshot.roles || [];
+                    const nextPart = nextRoles.includes(participant) ? participant : (nextRoles[0] || 'Person_A');
+                    if (nextPart !== participant) setParticipant(nextPart);
+                    setBleSessionContext(target.id, nextPart);
+                    return;
+                  }
+                } catch {
+                  // fallback
+                }
                 setBleSessionContext(target.id, participant);
               }}
+              onTabChange={tab => setActiveTab(tab)}
               currentParticipant={participant}
               onParticipantChange={p => setParticipant(p)}
               config={config}

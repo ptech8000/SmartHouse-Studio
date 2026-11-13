@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { loadAndValidateConfig } = require('./server/configPipeline');
+const { loadAndValidateConfig, buildEnvironmentConfig } = require('./server/configPipeline');
 const db = require('./server/database');
 const { generateAnnotationsCsv } = require('./server/csvExport');
 const { hashPassword, verifyPassword, validateAnnotationPayload, validateSessionId } = require('./server/security');
@@ -127,7 +127,61 @@ async function runTests() {
   db.deleteSession(testSessionId);
   console.log('✓ Security controls passed all checks');
 
-  console.log('\n🎉 ALL 5 TEST SUITES PASSED CLEANLY!\n');
+  // Test 6: Custom Environment Creation & Session Binding
+  console.log('\n[6/6] Testing Custom Environment Creation...');
+  const builtEnv = buildEnvironmentConfig({
+    name: 'Rehab Kitchen Lab',
+    description: '2-participant clinic environment',
+    roles: ['Resident_1', 'Caregiver_1'],
+    locations: [
+      { name: 'Prep Station', shortLabel: 'Prep', activities: ['chopping vegetables', 'pouring tea'] },
+      { name: 'Dining Desk', shortLabel: 'Desk', activities: ['eating meal', 'pouring tea'] }
+    ]
+  });
+  assert.strictEqual(builtEnv.valid, true, 'Custom environment must build cleanly');
+  assert.strictEqual(builtEnv.snapshot.roles.length, 2);
+  assert.strictEqual(builtEnv.snapshot.locations.length, 2);
+  assert.strictEqual(builtEnv.snapshot.activities.length, 3, 'Shared activity names must deduplicate cleanly');
+
+  const envId = 'env_test_' + Date.now();
+  const savedEnv = db.createEnvironment({
+    id: envId,
+    name: builtEnv.name,
+    description: builtEnv.description,
+    configHash: builtEnv.hash,
+    configSnapshot: builtEnv.snapshot
+  });
+  assert.strictEqual(savedEnv.name, 'Rehab Kitchen Lab');
+
+  const customSessionId = 'ENV_SESS_' + Date.now();
+  const customSess = db.createSession(
+    customSessionId,
+    savedEnv.config_hash,
+    savedEnv.snapshot,
+    'Europe/Paris',
+    savedEnv.id,
+    savedEnv.name
+  );
+  assert.strictEqual(customSess.environment_id, envId);
+
+  const customAnnCheck = validateAnnotationPayload({
+    client_uuid: 'env-uuid-' + Date.now(),
+    session_id: customSessionId,
+    participant: 'Resident_1',
+    timestamp_started: new Date(Date.now() - 3000).toISOString(),
+    timestamp_submitted: new Date().toISOString(),
+    location_id: savedEnv.snapshot.locations[0].id,
+    activity_id: savedEnv.snapshot.locationActivitiesMap[savedEnv.snapshot.locations[0].id][0].id,
+    interaction: 'assistive',
+    other_person: 'Caregiver_1'
+  }, savedEnv.snapshot);
+  assert.strictEqual(customAnnCheck.valid, true, 'Annotation using custom environment roles & locations must validate');
+
+  db.deleteSession(customSessionId);
+  db.deleteEnvironment(envId);
+  console.log('✓ Custom Environment creation & session binding passed all checks');
+
+  console.log('\n🎉 ALL 6 TEST SUITES PASSED CLEANLY!\n');
 }
 
 runTests().catch(err => {

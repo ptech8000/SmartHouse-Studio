@@ -214,15 +214,47 @@ function loadAndValidateConfig() {
     }
   });
 
-  // Standard interactions
-  const interactions = [
-    { key: 'solo', label: 'Solo', shortLabel: 'Solo', requiresPerson: false },
-    { key: 'collaborative', label: 'Collaborative', shortLabel: 'Collab', requiresPerson: true },
-    { key: 'assistive', label: 'Assistive', shortLabel: 'Assisted', requiresPerson: true }
-  ];
+  const { snapshot, hash } = buildSnapshotWithHash({
+    residentNumber,
+    roles,
+    locations,
+    activities,
+    activityLocations,
+    locationActivitiesMap,
+    sensors: rawSensors
+  });
 
-  // Default sensor streams if not present
-  const sensors = rawSensors || {
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    hash,
+    snapshot
+  };
+}
+
+const ROLE_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
+
+function buildSnapshotWithHash({
+  residentNumber,
+  roles,
+  locations,
+  activities,
+  activityLocations,
+  locationActivitiesMap,
+  sensors
+}) {
+  const interactions = roles.length >= 2
+    ? [
+        { key: 'solo', label: 'Solo', shortLabel: 'Solo', requiresPerson: false },
+        { key: 'collaborative', label: 'Collaborative', shortLabel: 'Collab', requiresPerson: true },
+        { key: 'assistive', label: 'Assistive', shortLabel: 'Assisted', requiresPerson: true }
+      ]
+    : [
+        { key: 'solo', label: 'Solo', shortLabel: 'Solo', requiresPerson: false }
+      ];
+
+  const resolvedSensors = sensors || {
     device_family: 'polar',
     streams: {
       acc: { enabled: true, rate_hz: 52, range_g: 8 },
@@ -243,23 +275,167 @@ function loadAndValidateConfig() {
     activityLocations,
     locationActivitiesMap,
     interactions,
-    sensors
+    sensors: resolvedSensors
   };
 
-  // Generate SHA-256 hash of deterministic JSON
   const serialized = JSON.stringify(snapshot, Object.keys(snapshot).sort());
   const hash = crypto.createHash('sha256').update(serialized).digest('hex');
   snapshot.hash = hash;
+  return { snapshot, hash };
+}
+
+/**
+ * Validates and builds a normalized ConfigSnapshot for an admin-created environment.
+ */
+function buildEnvironmentConfig(input) {
+  const errors = [];
+  const warnings = [];
+  const body = input && typeof input === 'object' ? input : {};
+
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (name.length < 2 || name.length > 64) {
+    errors.push('Environment name must be between 2 and 64 characters');
+  }
+
+  const description = typeof body.description === 'string' ? body.description.trim().slice(0, 240) : '';
+
+  const rawRoles = Array.isArray(body.roles) ? body.roles : [];
+  const roles = [];
+  const seenRoles = new Set();
+  for (const r of rawRoles) {
+    const roleStr = typeof r === 'string' ? r.trim() : '';
+    if (!roleStr) continue;
+    if (!ROLE_NAME_RE.test(roleStr)) {
+      errors.push(`Role "${roleStr}" must be 1–32 characters using only letters, numbers, underscores, or hyphens`);
+      continue;
+    }
+    if (seenRoles.has(roleStr.toLowerCase())) {
+      warnings.push(`Duplicate role "${roleStr}" ignored`);
+      continue;
+    }
+    seenRoles.add(roleStr.toLowerCase());
+    roles.push(roleStr);
+  }
+  if (roles.length === 0) {
+    errors.push('At least 1 participant role is required');
+  } else if (roles.length > 12) {
+    errors.push('Maximum of 12 participant roles per environment');
+  }
+
+  const rawLocations = Array.isArray(body.locations) ? body.locations : [];
+  if (rawLocations.length === 0) {
+    errors.push('At least 1 location/room is required');
+  } else if (rawLocations.length > 40) {
+    errors.push('Maximum of 40 locations per environment');
+  }
+
+  const locations = [];
+  const activities = [];
+  const activityByNorm = new Map();
+  const activityLocations = [];
+  const locationActivitiesMap = {};
+  const seenLocations = new Set();
+
+  rawLocations.forEach((rawLoc, locIdx) => {
+    const locName = typeof rawLoc?.name === 'string' ? rawLoc.name.trim() : '';
+    if (!locName || locName.length > 64) {
+      errors.push(`Location #${locIdx + 1} must have a name between 1 and 64 characters`);
+      return;
+    }
+    const normLoc = ZONE_ALIASES[normalizeKey(locName)] || normalizeKey(locName);
+    if (seenLocations.has(normLoc)) {
+      errors.push(`Duplicate location "${locName}"`);
+      return;
+    }
+    seenLocations.add(normLoc);
+
+    const shortLabelRaw = typeof rawLoc?.shortLabel === 'string' ? rawLoc.shortLabel.trim() : '';
+    const shortLabel = (shortLabelRaw || SHORT_LABELS.locations[normLoc] || locName).slice(0, 32);
+    const locId = locations.length;
+
+    const locObj = {
+      id: locId,
+      name: locName,
+      normalizedName: normLoc,
+      shortLabel,
+      description: typeof rawLoc?.description === 'string' ? rawLoc.description.trim().slice(0, 120) : ''
+    };
+    locations.push(locObj);
+    locationActivitiesMap[locId] = [];
+
+    const rawActs = Array.isArray(rawLoc?.activities) ? rawLoc.activities : [];
+    if (rawActs.length === 0) {
+      errors.push(`Location "${locName}" must include at least 1 activity`);
+      return;
+    }
+    if (rawActs.length > 30) {
+      errors.push(`Location "${locName}" cannot exceed 30 activities`);
+      return;
+    }
+
+    const seenActsInLoc = new Set();
+    rawActs.forEach(rawAct => {
+      const actName = typeof rawAct === 'string'
+        ? rawAct.trim()
+        : (typeof rawAct?.name === 'string' ? rawAct.name.trim() : '');
+      if (!actName || actName.length > 64) {
+        errors.push(`Invalid activity name in location "${locName}"`);
+        return;
+      }
+      const normAct = normalizeKey(actName);
+      if (seenActsInLoc.has(normAct)) return;
+      seenActsInLoc.add(normAct);
+
+      let actObj = activityByNorm.get(normAct);
+      if (!actObj) {
+        const actShortRaw = typeof rawAct === 'object' && typeof rawAct?.shortLabel === 'string'
+          ? rawAct.shortLabel.trim()
+          : '';
+        actObj = {
+          id: activities.length,
+          name: actName,
+          shortLabel: (actShortRaw || SHORT_LABELS.activities[actName] || actName).slice(0, 32)
+        };
+        activities.push(actObj);
+        activityByNorm.set(normAct, actObj);
+      }
+
+      locationActivitiesMap[locId].push(actObj);
+      activityLocations.push({
+        activityId: actObj.id,
+        locationId: locId,
+        activityName: actObj.name,
+        locationName: locObj.name
+      });
+    });
+  });
+
+  if (errors.length > 0) {
+    return { valid: false, errors, warnings, name, description, hash: null, snapshot: null };
+  }
+
+  const { snapshot, hash } = buildSnapshotWithHash({
+    residentNumber: roles.length,
+    roles,
+    locations,
+    activities,
+    activityLocations,
+    locationActivitiesMap,
+    sensors: body.sensors || null
+  });
 
   return {
-    valid: errors.length === 0,
-    errors,
+    valid: true,
+    errors: [],
     warnings,
+    name,
+    description,
     hash,
     snapshot
   };
 }
 
 module.exports = {
-  loadAndValidateConfig
+  loadAndValidateConfig,
+  buildEnvironmentConfig
 };

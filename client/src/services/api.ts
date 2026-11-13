@@ -5,7 +5,9 @@ import type {
   AnnotationPayload,
   StoredAnnotation,
   WearableDevice,
-  CollaboratorLock
+  CollaboratorLock,
+  EnvironmentItem,
+  EnvironmentDraftInput
 } from '../types';
 
 const API_BASE =
@@ -110,15 +112,42 @@ export async function fetchNetworkInfo(): Promise<{
   return res.json();
 }
 
-export async function fetchConfig(): Promise<{
+export async function fetchConfig(sessionId?: string): Promise<{
   valid: boolean;
   hash: string;
+  environment_id?: string;
+  environment_name?: string;
   snapshot: ConfigSnapshot;
   warnings: string[];
   errors: string[];
 }> {
-  const res = await apiFetch('/config');
+  const query = sessionId ? `?session=${encodeURIComponent(sessionId)}` : '';
+  const res = await apiFetch(`/config${query}`);
   if (!res.ok) throw await parseError(res, 'Failed to fetch config');
+  return res.json();
+}
+
+export async function fetchEnvironments(): Promise<EnvironmentItem[]> {
+  const res = await apiFetch('/environments');
+  if (!res.ok) throw await parseError(res, 'Failed to fetch environments');
+  return res.json();
+}
+
+export async function createEnvironment(draft: EnvironmentDraftInput): Promise<EnvironmentItem> {
+  const res = await apiFetch('/environments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(draft)
+  });
+  if (!res.ok) throw await parseError(res, 'Failed to create environment');
+  return res.json();
+}
+
+export async function deleteEnvironment(id: string): Promise<{ success: boolean; id: string }> {
+  const res = await apiFetch(`/environments/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
+  if (!res.ok) throw await parseError(res, 'Failed to delete environment');
   return res.json();
 }
 
@@ -154,12 +183,13 @@ export async function fetchParticipantLinks(
 
 export async function createSession(
   id: string,
-  timezone = 'Europe/Paris'
+  timezone = 'Europe/Paris',
+  environmentId?: string
 ): Promise<SessionItem & { participantTokens?: Record<string, string> }> {
   const res = await apiFetch('/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, timezone })
+    body: JSON.stringify({ id, timezone, environment_id: environmentId || undefined })
   });
   if (!res.ok) throw await parseError(res, 'Failed to create session');
   return res.json();
