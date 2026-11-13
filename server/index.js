@@ -83,16 +83,10 @@ function parseSessionSnapshot(session) {
   return cachedConfig.snapshot;
 }
 
-// Sync default environment and auto-seed initial default session S001 if no sessions exist
+// Sync default environment preset without auto-creating/starting any session
 try {
   if (cachedConfig.valid) {
     db.ensureDefaultEnvironment(cachedConfig.hash, cachedConfig.snapshot);
-  }
-  const existing = db.listSessions();
-  if (existing.length === 0 && cachedConfig.valid) {
-    db.createSession('S001', cachedConfig.hash, cachedConfig.snapshot, 'Europe/Paris', 'default-smart-house', 'Default Smart House');
-    db.ensureParticipantTokens('S001', cachedConfig.snapshot.roles || ['Person_A', 'Person_B', 'Person_C']);
-    console.log('[Database] Auto-seeded default session S001');
   }
 } catch (e) {
   console.warn('[Database] Seed warning:', e.message);

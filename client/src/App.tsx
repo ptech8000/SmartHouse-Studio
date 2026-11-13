@@ -140,6 +140,9 @@ export const App: React.FC = () => {
         targetSessionId = target.id;
         setCurrentSession(target);
         setBleSessionContext(target.id, me.participant || participant);
+      } else {
+        setCurrentSession(null);
+        setAnnotations([]);
       }
 
       const cfgRes = await fetchConfig(targetSessionId);
@@ -160,18 +163,23 @@ export const App: React.FC = () => {
   }, [participant, initialSession, roleParam, isParticipantClient]);
 
   const refreshLiveState = useCallback(async () => {
-    if (!currentSession) return;
     if (!isParticipantClient && !adminAuth?.authenticated) return;
-    if (isParticipantClient && participantAccessDenied) return;
+    if (isParticipantClient && (!currentSession || participantAccessDenied)) return;
     try {
       const sessionList = await fetchSessions();
       setSessions(sessionList);
-      const updatedCurr = sessionList.find(s => s.id === currentSession.id);
-      if (updatedCurr) setCurrentSession(updatedCurr);
+      const nextCurr = currentSession
+        ? sessionList.find(s => s.id === currentSession.id) || sessionList[0] || null
+        : sessionList[0] || null;
+      setCurrentSession(nextCurr);
 
       if (!isParticipantClient) {
-        const list = await fetchAnnotations(currentSession.id);
-        setAnnotations(list);
+        if (nextCurr) {
+          const list = await fetchAnnotations(nextCurr.id);
+          setAnnotations(list);
+        } else {
+          setAnnotations([]);
+        }
       }
     } catch (e: any) {
       if (e?.status === 401) {
@@ -398,7 +406,7 @@ export const App: React.FC = () => {
       {/* Top Navigation Header */}
       <AppHeader
         isParticipantClient={isParticipantClient}
-        sessionId={currentSession?.id || initialSession || 'S001'}
+        sessionId={currentSession?.id || initialSession || ''}
         sessionStatus={currentSession?.status === 'active' ? 'active' : 'stopped'}
         participant={participant}
         bleState={bleState}
@@ -429,9 +437,20 @@ export const App: React.FC = () => {
           /* PURE ADMIN VIEW (Default authenticated landing page at /) */
           <div className="admin-view-wrapper">
             <AdminConsole
-              currentSessionId={currentSession?.id || 'S001'}
+              currentSessionId={currentSession?.id || ''}
               activeTab={activeTab}
               onSelectSession={async sId => {
+                if (!sId) {
+                  setCurrentSession(null);
+                  setAnnotations([]);
+                  try {
+                    const cfgRes = await fetchConfig();
+                    if (cfgRes.snapshot) setConfig(cfgRes.snapshot);
+                  } catch {
+                    // ignore
+                  }
+                  return;
+                }
                 const target = sessions.find(s => s.id === sId) || {
                   id: sId,
                   config_hash: config?.hash || '',

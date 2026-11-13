@@ -135,12 +135,20 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           )}
 
           {/* Active Session Pill with Start/Stop Beacon */}
-          <div className={`context-pill session-pill ${sessionStatus === 'active' ? 'session-pill-active' : 'session-pill-stopped'}`}>
-            <span className="pill-dot" />
-            <span className="pill-muted">SESSION:</span>
-            <strong>{sessionId}</strong>
-            <span className="pill-status-tag">{sessionStatus === 'active' ? 'ACTIVE' : 'STOPPED'}</span>
-          </div>
+          {sessionId ? (
+            <div className={`context-pill session-pill ${sessionStatus === 'active' ? 'session-pill-active' : 'session-pill-stopped'}`}>
+              <span className="pill-dot" />
+              <span className="pill-muted">SESSION:</span>
+              <strong>{sessionId}</strong>
+              <span className="pill-status-tag">{sessionStatus === 'active' ? 'ACTIVE' : 'STOPPED'}</span>
+            </div>
+          ) : (
+            <div className="context-pill session-pill session-pill-stopped">
+              <span className="pill-dot" />
+              <span className="pill-muted">SESSION:</span>
+              <strong>NONE</strong>
+            </div>
+          )}
 
           {/* Participant Role Badge (shown cleanly in Participant mode) */}
           {isParticipantClient && (

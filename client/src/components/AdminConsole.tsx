@@ -128,6 +128,10 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   }, []);
 
   useEffect(() => {
+    if (!currentSessionId) {
+      setParticipantTokens({});
+      return;
+    }
     fetchParticipantLinks(currentSessionId)
       .then(res => setParticipantTokens(res.tokens || {}))
       .catch(() => setParticipantTokens({}));
@@ -252,8 +256,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       showFeedback(`Session "${sId}" deleted.`, 'info', 'Session Deleted');
       await loadSessions();
       const remaining = sessions.filter(s => s.id !== sId);
-      if (currentSessionId === sId && remaining.length > 0) {
-        onSelectSession(remaining[0].id);
+      if (currentSessionId === sId) {
+        onSelectSession(remaining.length > 0 ? remaining[0].id : '');
       }
       onRefreshData();
     } catch (err: any) {
@@ -354,7 +358,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           <div className="hero-tag-row">
             <span className="hero-eyebrow">ACTIVE EXPERIMENT SESSION</span>
             <span className={`status-pill ${isSessionActive ? 'pill-active' : 'pill-ended'}`}>
-              {isSessionActive ? '● RUNNING' : '■ STOPPED'}
+              {!activeSessionObj ? '○ NO SESSION' : isSessionActive ? '● RUNNING' : '■ STOPPED'}
             </span>
             <span className="env-pill-badge">
               <Layers size={12} /> {activeSessionObj?.environment_name || 'Default Smart House'}
@@ -363,13 +367,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               <Radio size={12} className="live-pulse-icon" /> Live Sync Active
             </span>
           </div>
-          <h2 className="hero-session-name">{currentSessionId}</h2>
+          <h2 className="hero-session-name">{activeSessionObj ? currentSessionId : 'No Active Session'}</h2>
           <div className="hero-meta-row">
             <span>Started: <strong>{activeSessionObj ? new Date(activeSessionObj.started_at).toLocaleTimeString() : '—'}</strong></span>
             <span>•</span>
             <span>Environment: <strong>{activeSessionObj?.environment_name || 'Default Smart House'}</strong></span>
             <span>•</span>
-            <span>Annotations: <strong>{activeSessionObj?.annotation_count ?? annotations.length}</strong></span>
+            <span>Annotations: <strong>{activeSessionObj ? (activeSessionObj.annotation_count ?? annotations.length) : 0}</strong></span>
             <span>•</span>
             <span>Sensors: <strong>{activeSessionObj?.chunk_count ?? 0} chunks</strong></span>
           </div>
@@ -377,7 +381,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 
         <div className="hero-right-col">
           {/* Prominent Start / Stop Action Button */}
-          {isSessionActive ? (
+          {activeSessionObj && (isSessionActive ? (
             <button
               className="btn-hero btn-hero-stop"
               onClick={() => handleStopSession(currentSessionId)}
@@ -395,7 +399,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               <Play size={18} />
               <span>Start Session</span>
             </button>
-          )}
+          ))}
         </div>
       </div>
 
@@ -497,7 +501,15 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   </tr>
                 </thead>
                 <tbody>
-                  {sessions.map(s => {
+                  {sessions.length === 0 ? (
+                    <tr>
+                      <td colSpan={8}>
+                        <div className="empty-state-box">
+                          No experiment sessions created yet. Choose an environment above and click <strong>Create Session</strong> when you are ready.
+                        </div>
+                      </td>
+                    </tr>
+                  ) : sessions.map(s => {
                     const isSelected = s.id === currentSessionId;
                     return (
                       <tr key={s.id} className={isSelected ? 'row-selected' : ''}>
@@ -580,15 +592,22 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           <section className="pro-section multi-user-hub">
             <div className="section-head-pro">
               <div>
-                <h3>2. Live Participant URLs for Session "{currentSessionId}"</h3>
+                <h3>2. Live Participant URLs {activeSessionObj ? `for Session "${currentSessionId}"` : ''}</h3>
                 <p>Share each participant's dedicated link below so they can join from any device or network (mobile data, Wi-Fi, tablet, or desktop)</p>
               </div>
-              <button className="btn-ui btn-ui-accent" onClick={openAllParticipantTabs}>
-                <ExternalLink size={15} />
-                <span>Open All {roles.length} Participant Tabs</span>
-              </button>
+              {activeSessionObj && (
+                <button className="btn-ui btn-ui-accent" onClick={openAllParticipantTabs}>
+                  <ExternalLink size={15} />
+                  <span>Open All {roles.length} Participant Tabs</span>
+                </button>
+              )}
             </div>
 
+            {!activeSessionObj ? (
+              <div className="empty-state-box">
+                Create or select a session in Section 1 above to generate tokenized participant invite links.
+              </div>
+            ) : (
             <div className="participant-launch-grid">
               {roles.map(role => {
                 const queryPath = buildParticipantQuery(role);
@@ -624,6 +643,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                 );
               })}
             </div>
+            )}
 
           </section>
         </div>
@@ -643,7 +663,12 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               <div className="fleet-master-buttons">
                 <button
                   className="btn-ui btn-ui-primary"
+                  disabled={!activeSessionObj}
                   onClick={() => {
+                    if (!activeSessionObj) {
+                      showFeedback('Create and select a session first.', 'warning', 'No Session');
+                      return;
+                    }
                     startAllVirtualWatches(roles, currentSessionId);
                     showFeedback('Started virtual smartwatches for all residents!');
                   }}
@@ -723,7 +748,12 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     <div className="watch-card-actions">
                       <button
                         className={`btn-ui btn-full ${isSim ? 'btn-ui-danger' : 'btn-ui-primary'}`}
+                        disabled={!isSim && !activeSessionObj}
                         onClick={() => {
+                          if (!isSim && !activeSessionObj) {
+                            showFeedback('Create and select a session first.', 'warning', 'No Session');
+                            return;
+                          }
                           toggleVirtualWatch(role, currentSessionId);
                           showFeedback(`${isSim ? 'Stopped' : 'Started'} virtual watch for ${role}`);
                         }}
@@ -756,6 +786,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       {/* ============================================================== */}
       {activeTab === 'data' && (
         <div className="tab-module-content">
+          {!activeSessionObj ? (
+            <section className="pro-section">
+              <div className="empty-state-box">
+                No session selected yet. Create a session in the <strong>Sessions & Live URLs</strong> tab to view annotations, inject test records, or export CSV datasets.
+              </div>
+            </section>
+          ) : (
+          <>
           {/* CSV Export Center */}
           <section className="pro-section">
             <div className="section-head-pro">
@@ -925,6 +963,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               </div>
             )}
           </section>
+          </>
+          )}
         </div>
       )}
 
@@ -1048,8 +1088,12 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
           <section className="pro-section">
             <div className="section-head-pro">
               <div>
-                <h3>Active Session Snapshot & Data Integrity ({currentSessionId})</h3>
-                <p>Frozen configuration snapshot active in session "{currentSessionId}" ({activeSessionObj?.environment_name || 'Default Smart House'})</p>
+                <h3>Active Configuration Snapshot & Data Integrity {activeSessionObj ? `(${currentSessionId})` : '(Default Preset)'}</h3>
+                <p>
+                  {activeSessionObj
+                    ? `Frozen configuration snapshot active in session "${currentSessionId}" (${activeSessionObj.environment_name || 'Default Smart House'})`
+                    : 'Built-in Default Smart House configuration snapshot (no active session selected)'}
+                </p>
               </div>
               <button className="btn-ui btn-ui-secondary" onClick={handleReloadConfig}>
                 <RefreshCw size={14} />
