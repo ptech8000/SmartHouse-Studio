@@ -1,0 +1,19 @@
+{
+  "name": "SmartHouse Studio — Research Annotation & Telemetry",
+  "short_name": "SmartHouse",
+  "description": "Multi-resident smart home activity annotation and synchronized smartwatch BLE telemetry console.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

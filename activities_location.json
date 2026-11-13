@@ -1,0 +1,23 @@
+[
+    {"id": 0, "name": "entering house", "zone": "front door"},
+    {"id": 1, "name": "exiting house", "zone": "back door"},
+    {"id": 2, "name": "climbing stairs", "zone": "stairs"},
+    {"id": 3, "name": "descending stairs","zone": "stairs"},
+    {"id": 4, "name": "transitioning at landing", "zone": "landing"},
+    {"id": 5, "name": "using bathroom","zone": "bathroom"},
+    {"id": 6, "name": "ventilating bathroom", "zone": "bathroom"},
+    {"id": 7, "name": "using bedroom_1", "zone": "bedroom_1"},
+    {"id": 8, "name": "ventilating bedroom_1", "zone": "bedroom_1"},
+    {"id": 9, "name": "using bedroom_2", "zone": "bedroom_2"},
+    {"id": 10, "name": "ventilating bedroom_2", "zone": "bedroom_2"},
+    {"id": 11, "name": "using toilet", "zone": "toilet"},
+    {"id": 12, "name": "ventilating kitchen", "zone": "kitchen"},
+    {"id": 13, "name": "preparing meal", "zone": "kitchen"},
+    {"id": 14, "name": "eating", "zone": "dining"},
+    {"id": 15, "name": "transitioning at dining", "zone": "dining"},
+    {"id": 16, "name": "ventilating living", "zone": "living"},
+    {"id": 17, "name": "resting on the couch", "zone": "living"},
+    {"id": 18, "name": "operating TV", "zone": "living"},
+    {"id": 19, "name": "vacuuming living", "zone": "living"}
+
+]

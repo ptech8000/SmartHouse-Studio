@@ -1,0 +1,22 @@
+[
+    {"id": 0, "name": "entering house"},
+    {"id": 1, "name": "exiting house"},
+    {"id": 2, "name": "climbing stairs"},
+    {"id": 3, "name": "descending stairs"},
+    {"id": 4, "name": "transitioning at landing"},
+    {"id": 5, "name": "using bathroom"},
+    {"id": 6, "name": "ventilating bathroom"},
+    {"id": 7, "name": "using bedroom_1"},
+    {"id": 8, "name": "ventilating bedroom_1"},
+    {"id": 9, "name": "using bedroom_2"},
+    {"id": 10, "name": "ventilating bedroom_2"},
+    {"id": 11, "name": "using toilet"},
+    {"id": 12, "name": "ventilating kitchen"},
+    {"id": 13, "name": "preparing meal"},
+    {"id": 14, "name": "eating"},
+    {"id": 15, "name": "transitioning at dining"},
+    {"id": 16, "name": "ventilating living"},
+    {"id": 17, "name": "resting or working on the couch"},
+    {"id": 18, "name": "operating TV"},
+    {"id": 19, "name": "vacuuming living"}
+]

@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: smarthouse-studio
+    runtime: node
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /api/time
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        sync: false
+      # Optional: mount a Render Persistent Disk on Starter+ plans and set DATA_DIR=/var/data
+      # - key: DATA_DIR
+      #   value: /var/data
+    # Persistent disk requires a paid Render plan (Starter+):
+    # disk:
+    #   name: smarthouse-data
+    #   mountPath: /var/data
+    #   sizeGB: 1

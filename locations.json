@@ -1,0 +1,14 @@
+[
+    {"id": 0, "name": "front door","description": ""},
+    {"id": 1, "name": "back door", "description": ""},
+    {"id": 2, "name": "living", "description": ""},
+    {"id": 3, "name": "dining", "description": ""},
+    {"id": 4, "name": "stairs", "description": ""},
+    {"id": 5, "name": "landing area", "description": ""},
+    {"id": 6, "name": "bedroom 1", "description": ""},
+    {"id": 7, "name": "bedroom 2", "description": ""},
+    {"id": 8, "name": "bathroom", "description": ""},
+    {"id": 9, "name": "toilet", "description": ""},
+    {"id": 10, "name": "kitchen", "description": ""}
+
+]

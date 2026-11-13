@@ -1,0 +1,265 @@
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+// Configuration directory is the parent directory where json files are located
+const CONFIG_DIR = path.resolve(__dirname, '..');
+
+// Helper to safely parse JSON tolerating trailing commas & comments
+function tolerantJsonParse(rawText, filename) {
+  try {
+    // Strip UTF-8 BOM if present
+    let cleaned = rawText.replace(/^\uFEFF/, '');
+    // Strip single line & multi-line comments
+    cleaned = cleaned
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^\\:])\/\/.*$/gm, '$1');
+    // Strip trailing commas before } or ]
+    cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
+    return JSON.parse(cleaned);
+  } catch (err) {
+    throw new Error(`Failed to parse ${filename}: ${err.message}`);
+  }
+}
+
+// Normalization utility
+function normalizeKey(str) {
+  if (!str) return '';
+  return String(str)
+    .toLowerCase()
+    .trim()
+    .replace(/[_\s]+/g, ' ');
+}
+
+// Known aliases for fuzzy matching
+const ZONE_ALIASES = {
+  'landing': 'landing area',
+  'landing area': 'landing area',
+  'bedroom 1': 'bedroom 1',
+  'bedroom_1': 'bedroom 1',
+  'bedroom 2': 'bedroom 2',
+  'bedroom_2': 'bedroom 2'
+};
+
+// UI short labels for clean touch tiles matching the hand-drawn sketches
+const SHORT_LABELS = {
+  locations: {
+    'front door': 'F Door',
+    'back door': 'B Door',
+    'landing area': 'Landing',
+    'bedroom 1': 'Bedroom 1',
+    'bedroom 2': 'Bedroom 2',
+    'kitchen': 'Kitchen',
+    'dining': 'Dining',
+    'living': 'Living',
+    'bathroom': 'Bathroom',
+    'toilet': 'Toilet',
+    'stairs': 'Stairs'
+  },
+  activities: {
+    'operating TV': 'TV',
+    'vacuuming living': 'Vacuum',
+    'resting on the couch': 'Sit on couch',
+    'resting or working on the couch': 'Sit on couch',
+    'ventilating living': 'Window',
+    'entering house': 'Enter',
+    'exiting house': 'Exit',
+    'climbing stairs': 'Ascending',
+    'descending stairs': 'Descending',
+    'transitioning at landing': 'Transit',
+    'using bathroom': 'Bathroom',
+    'ventilating bathroom': 'Ventilate',
+    'using bedroom_1': 'Bedroom 1',
+    'ventilating bedroom_1': 'Ventilate',
+    'using bedroom_2': 'Bedroom 2',
+    'ventilating bedroom_2': 'Ventilate',
+    'using toilet': 'Toilet',
+    'ventilating kitchen': 'Ventilate',
+    'preparing meal': 'Cooking',
+    'eating': 'Eating',
+    'transitioning at dining': 'Transit'
+  },
+  interactions: {
+    'solo': 'Solo',
+    'collaborative': 'Collab',
+    'assistive': 'Assisted'
+  }
+};
+
+function loadAndValidateConfig() {
+  const warnings = [];
+  const errors = [];
+
+  const scenarioPath = path.join(CONFIG_DIR, 'scenario.json');
+  const locationsPath = path.join(CONFIG_DIR, 'locations.json');
+  const activitiesPath = path.join(CONFIG_DIR, 'activities.json');
+  const actLocPath = path.join(CONFIG_DIR, 'activities_location.json');
+  const sensorsPath = path.join(CONFIG_DIR, 'sensors.json');
+
+  let rawScenario, rawLocations, rawActivities, rawActLoc, rawSensors;
+
+  try {
+    rawScenario = tolerantJsonParse(fs.readFileSync(scenarioPath, 'utf8'), 'scenario.json');
+  } catch (e) { errors.push(e.message); }
+
+  try {
+    rawLocations = tolerantJsonParse(fs.readFileSync(locationsPath, 'utf8'), 'locations.json');
+  } catch (e) { errors.push(e.message); }
+
+  try {
+    rawActivities = tolerantJsonParse(fs.readFileSync(activitiesPath, 'utf8'), 'activities.json');
+  } catch (e) { errors.push(e.message); }
+
+  try {
+    rawActLoc = tolerantJsonParse(fs.readFileSync(actLocPath, 'utf8'), 'activities_location.json');
+  } catch (e) { errors.push(e.message); }
+
+  try {
+    if (fs.existsSync(sensorsPath)) {
+      rawSensors = tolerantJsonParse(fs.readFileSync(sensorsPath, 'utf8'), 'sensors.json');
+    }
+  } catch (e) { warnings.push(`sensors.json parse warning: ${e.message}`); }
+
+  if (errors.length > 0) {
+    return { valid: false, errors, warnings, snapshot: null };
+  }
+
+  // 1. Validate Scenario
+  const roles = Array.isArray(rawScenario.roles) ? rawScenario.roles : [];
+  const residentNumber = rawScenario['resident number'] || roles.length;
+  if (roles.length === 0) {
+    errors.push('scenario.json has empty roles array');
+  }
+  if (roles.length !== residentNumber) {
+    warnings.push(`resident number (${residentNumber}) does not match roles count (${roles.length})`);
+  }
+
+  // 2. Normalize Locations
+  const locationMap = new Map();
+  const normalizedLocationLookup = new Map();
+
+  const locations = rawLocations.map((loc, idx) => {
+    const rawName = loc.name || `Location ${loc.id ?? idx}`;
+    const normName = normalizeKey(rawName);
+    const resolvedName = ZONE_ALIASES[normName] || normName;
+    const shortLabel = SHORT_LABELS.locations[normName] || SHORT_LABELS.locations[resolvedName] || rawName;
+
+    const locObj = {
+      id: typeof loc.id === 'number' ? loc.id : idx,
+      name: rawName,
+      normalizedName: resolvedName,
+      shortLabel: shortLabel,
+      description: loc.description || ''
+    };
+
+    locationMap.set(locObj.id, locObj);
+    normalizedLocationLookup.set(resolvedName, locObj.id);
+    normalizedLocationLookup.set(normName, locObj.id);
+    return locObj;
+  });
+
+  // 3. Normalize Activities
+  const activityMap = new Map();
+  const activities = rawActivities.map((act, idx) => {
+    const id = typeof act.id === 'number' ? act.id : idx;
+    const name = act.name || `Activity ${id}`;
+    const shortLabel = SHORT_LABELS.activities[name] || name;
+
+    const actObj = {
+      id,
+      name,
+      shortLabel
+    };
+    activityMap.set(id, actObj);
+    return actObj;
+  });
+
+  // 4. Map Activities to Locations
+  const activityLocations = [];
+  const locationActivitiesMap = {}; // locationId -> array of activity objects
+
+  locations.forEach(l => {
+    locationActivitiesMap[l.id] = [];
+  });
+
+  rawActLoc.forEach(entry => {
+    const actId = entry.id;
+    const rawZone = entry.zone;
+    const normZone = normalizeKey(rawZone);
+    const resolvedZone = ZONE_ALIASES[normZone] || normZone;
+
+    let targetLocationId = null;
+    if (typeof entry.location_id === 'number') {
+      targetLocationId = entry.location_id;
+    } else if (normalizedLocationLookup.has(resolvedZone)) {
+      targetLocationId = normalizedLocationLookup.get(resolvedZone);
+    } else if (normalizedLocationLookup.has(normZone)) {
+      targetLocationId = normalizedLocationLookup.get(normZone);
+    }
+
+    if (targetLocationId !== null && locationMap.has(targetLocationId)) {
+      const act = activityMap.get(actId) || { id: actId, name: entry.name, shortLabel: entry.name };
+      activityLocations.push({
+        activityId: actId,
+        locationId: targetLocationId,
+        activityName: act.name,
+        locationName: locationMap.get(targetLocationId).name
+      });
+      // Add if not already added
+      if (!locationActivitiesMap[targetLocationId].some(a => a.id === actId)) {
+        locationActivitiesMap[targetLocationId].push(act);
+      }
+    } else {
+      warnings.push(`Activity id ${actId} ("${entry.name}") references unmapped zone "${rawZone}"`);
+    }
+  });
+
+  // Standard interactions
+  const interactions = [
+    { key: 'solo', label: 'Solo', shortLabel: 'Solo', requiresPerson: false },
+    { key: 'collaborative', label: 'Collaborative', shortLabel: 'Collab', requiresPerson: true },
+    { key: 'assistive', label: 'Assistive', shortLabel: 'Assisted', requiresPerson: true }
+  ];
+
+  // Default sensor streams if not present
+  const sensors = rawSensors || {
+    device_family: 'polar',
+    streams: {
+      acc: { enabled: true, rate_hz: 52, range_g: 8 },
+      gyro: { enabled: true, rate_hz: 52, range_dps: 2000 },
+      hr: { enabled: true, rate_hz: 1 },
+      ppg: { enabled: false, rate_hz: 55 }
+    },
+    chunk_seconds: 10
+  };
+
+  const snapshot = {
+    schemaVersion: 2,
+    loadedAt: new Date().toISOString(),
+    residentNumber,
+    roles,
+    locations,
+    activities,
+    activityLocations,
+    locationActivitiesMap,
+    interactions,
+    sensors
+  };
+
+  // Generate SHA-256 hash of deterministic JSON
+  const serialized = JSON.stringify(snapshot, Object.keys(snapshot).sort());
+  const hash = crypto.createHash('sha256').update(serialized).digest('hex');
+  snapshot.hash = hash;
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    hash,
+    snapshot
+  };
+}
+
+module.exports = {
+  loadAndValidateConfig
+};

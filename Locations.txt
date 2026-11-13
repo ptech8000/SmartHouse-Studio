@@ -1,0 +1,122 @@
+Locations  
+Activities
+1 Front door  1. Entering house 
+  2. Exiting house 
+2 Back door  1. Entering house 
+  2. Exiting house 
+3 Stairs  1. Ascending stairs 
+  2. Descending stairs 
+4 Landing 1. Transitioning at landing 
+5 Bathroom 1. Using bathroom 
+  2. Ventilating bathroom 
+6 Bedroom_1 1. Using Bedroom_1 
+  2. Ventilating Bedroom_1 
+7 Bedroom_2 1. Using Bedroom_2 
+  2. Ventilating Bedroom_2 
+8 Toilet  1. Using Toilet 
+ 9 Kitchen  1. Ventilating Kitchen 
+  2. preparing meals 
+  
+  
+  
+  
+  
+10 Dining 
+  1. eating  
+  2. Transitioning at dining 
+11 Living 1. Ventilating Living 
+  2. Relaxing on couch 
+  3. Operating TV
+
+
+1. Flow (fix)
+2. Json file (may change)
+3. Output downloadable csv file
+
+
+The app is for collecting annotations from particcipants in experiment in smart house
+
+
+The flow is fixed,
+ but json files contents may change from time to time 
+Json files:
+scenario.json
+locations.json
+activities.json
+activities_location.json
+
+Flow 
+Interface 1 : 
+display time  – every page 
+display time  – every page with seconds 
+display locations options 
+action – allow user to click and choose a location
+Interface 2: 
+display time  – every page 
+display time  – every page with seconds 
+display location – the one the user choose 
+display activities available in that location as options
+action – allow user to click and choose an activity
+
+  Interface 3: 
+display time  – every page 
+display time  – every page with seconds 
+display location – the one the user chooses 
+display activity – the one the user chooses
+display interaction options (solo, collaborative, assistive)
+action – allow user to click and choose an interaction
+
+  Interface 4: 
+display time  – every page 
+display time  – every page with seconds 
+display location – the one the user chooses 
+display activity – the one the user chooses
+display interaction – the one the user chooses
+display person options (Person_B, PersonA) , this is the situation if the user is Person_A
+action – allow user to click and choose a person
+
+
+  Interface 4: 
+display time  – every page 
+display time  – every page with seconds 
+display all options 
+action – allow user to edit or accept (submit)
+
+
+
+Next background database update with current data
+After session fininh user can download file saved as csv
+Download options : individual or all the people in the session , for example all the 3 people in the session together in one csv file
+
+
+
+
+ Locations  
+Activities
+1 Front door  1. Entering house 
+  2. Exiting house 
+2 Back door  1. Entering house 
+  2. Exiting house 
+3 Stairs  1. Ascending stairs 
+  2. Descending stairs 
+4 Landing 1. Transitioning at landing 
+5 Bathroom 1. Using bathroom 
+  2. Ventilating bathroom 
+6 Bedroom_1 1. Using Bedroom_1 
+  2. Ventilating Bedroom_1 
+7 Bedroom_2 1. Using Bedroom_2 
+  2. Ventilating Bedroom_2 
+8 Toilet  1. Using Toilet 
+ 9 Kitchen  1. Ventilating Kitchen 
+  2. preparing meals 
+  
+  
+  
+  
+  
+10 Dining 
+  1. eating  
+  2. Transitioning at dining 
+11 Living 1. Ventilating Living 
+  2. Relaxing on couch 
+  3. Operating TV

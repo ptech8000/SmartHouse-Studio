@@ -1,0 +1,13 @@
+{
+  "device_family": "polar",
+  "streams": {
+    "acc": { "enabled": true, "rate_hz": 52, "range_g": 8 },
+    "gyro": { "enabled": true, "rate_hz": 52, "range_dps": 2000 },
+    "ppg": { "enabled": false, "rate_hz": 55 },
+    "hr": { "enabled": true, "rate_hz": 1 },
+    "ppi": { "enabled": false }
+  },
+  "chunk_seconds": 10,
+  "offline_recording_backup": true,
+  "time_sync_interval_s": 300
+}
