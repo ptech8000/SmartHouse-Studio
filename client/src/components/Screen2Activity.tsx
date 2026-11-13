@@ -32,8 +32,12 @@ export const Screen2Activity: React.FC<Screen2ActivityProps> = ({
                 onClick={() => onSelect(act)}
               >
                 <span className="tile-primary-text">{act.shortLabel || act.name}</span>
-                {act.shortLabel && act.shortLabel !== act.name && (
-                  <span className="tile-sub-text">{act.name}</span>
+                {act.canDoTogether === false ? (
+                  <span className="tile-sub-text">Solo only</span>
+                ) : (
+                  act.shortLabel && act.shortLabel !== act.name && (
+                    <span className="tile-sub-text">{act.name}</span>
+                  )
                 )}
               </button>
             );

@@ -256,6 +256,8 @@ export const App: React.FC = () => {
       const validActs = config.locationActivitiesMap[loc.id] || [];
       if (!validActs.some(a => a.id === chosenActivity.id)) {
         setChosenActivity(null);
+        setChosenInteraction(null);
+        setChosenPerson(null);
       }
     }
     setCurrentStep(2);
@@ -263,6 +265,18 @@ export const App: React.FC = () => {
 
   const handleActivitySelect = (act: ActivityItem) => {
     setChosenActivity(act);
+    if (act.canDoTogether === false) {
+      const soloInter = config?.interactions.find(i => !i.requiresPerson) || {
+        key: 'solo',
+        label: 'Solo',
+        shortLabel: 'Solo',
+        requiresPerson: false
+      };
+      setChosenInteraction(soloInter);
+      setChosenPerson(null);
+      setCurrentStep(5);
+      return;
+    }
     setCurrentStep(3);
   };
 
@@ -530,9 +544,12 @@ export const App: React.FC = () => {
                 <>
                   {/* Progressive Flow Step Indicator */}
                   {(() => {
-                    const needsPerson = chosenInteraction?.requiresPerson !== false;
-                    const displayTotal = needsPerson ? 5 : 4;
-                    const displayStep = !needsPerson && currentStep === 5 ? 4 : currentStep;
+                    const soloOnlyActivity = chosenActivity?.canDoTogether === false;
+                    const needsPerson = !soloOnlyActivity && chosenInteraction?.requiresPerson !== false;
+                    const displayTotal = soloOnlyActivity ? 3 : (needsPerson ? 5 : 4);
+                    const displayStep = soloOnlyActivity && currentStep === 5
+                      ? 3
+                      : (!needsPerson && currentStep === 5 ? 4 : currentStep);
                     const pct = Math.round((displayStep / displayTotal) * 100);
                     const stepNames: Record<number, string> = {
                       1: 'Location',
@@ -588,6 +605,7 @@ export const App: React.FC = () => {
                     {currentStep === 3 && (
                       <Screen3Interaction
                         interactions={config.interactions}
+                        soloOnly={chosenActivity?.canDoTogether === false}
                         onSelect={handleInteractionSelect}
                         selectedKey={chosenInteraction?.key}
                       />

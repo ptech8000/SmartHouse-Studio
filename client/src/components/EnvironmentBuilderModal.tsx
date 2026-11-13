@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { ConfigSnapshot, EnvironmentDraftInput, EnvironmentItem, EnvironmentLocationDraft } from '../types';
+import type {
+  ConfigSnapshot,
+  EnvironmentActivityDraft,
+  EnvironmentDraftInput,
+  EnvironmentItem,
+  EnvironmentLocationDraft
+} from '../types';
 import { createEnvironment, downloadEnvironmentJson } from '../services/api';
 import { parseUploadedEnvironmentFiles } from '../utils/environmentJson';
 import { useNotify } from './InAppNotifications';
@@ -27,13 +33,58 @@ const STARTER_APARTMENT: EnvironmentDraftInput = {
   description: 'Compact studio/1-bedroom layout with 2 residents',
   roles: ['Person_A', 'Person_B'],
   locations: [
-    { name: 'Kitchen', shortLabel: 'Kitchen', activities: ['preparing meal', 'washing dishes', 'cleaning'] },
-    { name: 'Living Room', shortLabel: 'Living', activities: ['watching TV', 'resting on couch', 'vacuuming'] },
-    { name: 'Bedroom', shortLabel: 'Bedroom', activities: ['sleeping', 'dressing', 'reading'] },
-    { name: 'Bathroom', shortLabel: 'Bathroom', activities: ['showering', 'brushing teeth', 'using toilet'] },
-    { name: 'Front Door', shortLabel: 'Entrance', activities: ['entering flat', 'exiting flat'] }
+    {
+      name: 'Kitchen',
+      shortLabel: 'Kitchen',
+      activities: [
+        { name: 'preparing meal', canDoTogether: true },
+        { name: 'washing dishes', canDoTogether: false },
+        { name: 'cleaning', canDoTogether: false }
+      ]
+    },
+    {
+      name: 'Living Room',
+      shortLabel: 'Living',
+      activities: [
+        { name: 'watching TV', canDoTogether: false },
+        { name: 'resting on couch', canDoTogether: true },
+        { name: 'vacuuming', canDoTogether: false }
+      ]
+    },
+    {
+      name: 'Bedroom',
+      shortLabel: 'Bedroom',
+      activities: [
+        { name: 'sleeping', canDoTogether: false },
+        { name: 'dressing', canDoTogether: false },
+        { name: 'reading', canDoTogether: false }
+      ]
+    },
+    {
+      name: 'Bathroom',
+      shortLabel: 'Bathroom',
+      activities: [
+        { name: 'showering', canDoTogether: false },
+        { name: 'brushing teeth', canDoTogether: false },
+        { name: 'using toilet', canDoTogether: false }
+      ]
+    },
+    {
+      name: 'Front Door',
+      shortLabel: 'Entrance',
+      activities: [
+        { name: 'entering flat', canDoTogether: true },
+        { name: 'exiting flat', canDoTogether: true }
+      ]
+    }
   ]
 };
+
+function toActDraft(item: string | EnvironmentActivityDraft): EnvironmentActivityDraft {
+  return typeof item === 'string'
+    ? { name: item, canDoTogether: true }
+    : { name: item.name, shortLabel: item.shortLabel, canDoTogether: item.canDoTogether !== false };
+}
 
 export function snapshotToDraft(snapshot: ConfigSnapshot, namePrefix = 'Custom Copy'): EnvironmentDraftInput {
   return {
@@ -43,7 +94,11 @@ export function snapshotToDraft(snapshot: ConfigSnapshot, namePrefix = 'Custom C
     locations: (snapshot.locations || []).map(loc => ({
       name: loc.name,
       shortLabel: loc.shortLabel || loc.name,
-      activities: (snapshot.locationActivitiesMap?.[loc.id] || []).map(a => a.name)
+      activities: (snapshot.locationActivitiesMap?.[loc.id] || []).map(a => ({
+        name: a.name,
+        shortLabel: a.shortLabel || a.name,
+        canDoTogether: a.canDoTogether !== false
+      }))
     }))
   };
 }
@@ -75,8 +130,8 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     setRoles(draft.roles.length > 0 ? [...draft.roles] : ['Person_A', 'Person_B']);
     setLocations(
       draft.locations.length > 0
-        ? draft.locations.map(l => ({ ...l, activities: [...l.activities] }))
-        : [{ name: 'Main Room', shortLabel: 'Main Room', activities: ['activity 1'] }]
+        ? draft.locations.map(l => ({ ...l, activities: l.activities.map(toActDraft) }))
+        : [{ name: 'Main Room', shortLabel: 'Main Room', activities: [{ name: 'activity 1', canDoTogether: true }] }]
     );
     setActivityInputs({});
     setErrorMsg(null);
@@ -167,12 +222,26 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     setLocations(prev =>
       prev.map((loc, idx) => {
         if (idx !== locIdx) return loc;
-        if (loc.activities.some(a => a.toLowerCase() === raw.toLowerCase())) return loc;
-        return { ...loc, activities: [...loc.activities, raw] };
+        const normalized = loc.activities.map(toActDraft);
+        if (normalized.some(a => a.name.toLowerCase() === raw.toLowerCase())) return loc;
+        return { ...loc, activities: [...normalized, { name: raw, canDoTogether: true }] };
       })
     );
     setActivityInputs(prev => ({ ...prev, [locIdx]: '' }));
     setErrorMsg(null);
+  };
+
+  const handleToggleActivityMode = (locIdx: number, actIdx: number) => {
+    setLocations(prev =>
+      prev.map((loc, idx) => {
+        if (idx !== locIdx) return loc;
+        const normalized = loc.activities.map(toActDraft);
+        const updated = normalized.map((act, j) =>
+          j === actIdx ? { ...act, canDoTogether: act.canDoTogether === false } : act
+        );
+        return { ...loc, activities: updated };
+      })
+    );
   };
 
   const handleRemoveActivity = (locIdx: number, actIdx: number) => {
@@ -199,9 +268,9 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     // Flush any uncommitted activity inputs typed inside location boxes
     const finalLocations = locations.map((loc, idx) => {
       const pendingAct = (activityInputs[idx] || '').trim();
-      const acts = [...loc.activities];
-      if (pendingAct && !acts.some(a => a.toLowerCase() === pendingAct.toLowerCase())) {
-        acts.push(pendingAct);
+      const acts = loc.activities.map(toActDraft);
+      if (pendingAct && !acts.some(a => a.name.toLowerCase() === pendingAct.toLowerCase())) {
+        acts.push({ name: pendingAct, canDoTogether: true });
       }
       return {
         name: loc.name.trim(),
@@ -431,22 +500,34 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
                   </div>
 
                   <div className="env-acts-wrap">
-                    <span className="env-acts-lbl">Activities ({loc.activities.length}):</span>
+                    <span className="env-acts-lbl">Activities ({loc.activities.length}) — click badge to toggle Together vs Solo only:</span>
                     <div className="env-chip-list">
-                      {loc.activities.map((act, actIdx) => (
-                        <span key={`${locIdx}-${act}-${actIdx}`} className="env-act-chip">
-                          <span>{act}</span>
-                          <button
-                            type="button"
-                            className="chip-remove-btn"
-                            onClick={() => handleRemoveActivity(locIdx, actIdx)}
-                            title={`Remove ${act}`}
-                            aria-label={`Remove ${act}`}
-                          >
-                            <X size={12} />
-                          </button>
-                        </span>
-                      ))}
+                      {loc.activities.map((rawAct, actIdx) => {
+                        const act = toActDraft(rawAct);
+                        const isTogether = act.canDoTogether !== false;
+                        return (
+                          <span key={`${locIdx}-${act.name}-${actIdx}`} className="env-act-chip">
+                            <span>{act.name}</span>
+                            <button
+                              type="button"
+                              className={`chip-mode-toggle ${isTogether ? 'mode-together' : 'mode-solo'}`}
+                              onClick={() => handleToggleActivityMode(locIdx, actIdx)}
+                              title={isTogether ? 'Allows Solo / Collab / Assisted — click to set Solo only' : 'Solo only — click to allow Together / Collab / Assisted'}
+                            >
+                              {isTogether ? 'Together' : 'Solo only'}
+                            </button>
+                            <button
+                              type="button"
+                              className="chip-remove-btn"
+                              onClick={() => handleRemoveActivity(locIdx, actIdx)}
+                              title={`Remove ${act.name}`}
+                              aria-label={`Remove ${act.name}`}
+                            >
+                              <X size={12} />
+                            </button>
+                          </span>
+                        );
+                      })}
                     </div>
 
                     <div className="env-inline-add">

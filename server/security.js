@@ -241,6 +241,13 @@ function validateAnnotationPayload(body, snapshot, verifiedParticipant = null) {
     return { valid: false, error: 'Invalid interaction type' };
   }
 
+  if (actObj.canDoTogether === false && interObj.requiresPerson) {
+    return {
+      valid: false,
+      error: `Activity "${actObj.name}" is solo-only and does not allow collaborative or assistive interaction`
+    };
+  }
+
   let otherPerson = '';
   if (interObj.requiresPerson) {
     otherPerson = typeof body.other_person === 'string' ? body.other_person.trim() : '';

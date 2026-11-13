@@ -51,18 +51,24 @@ export const BreadcrumbStack: React.FC<BreadcrumbStackProps> = ({
         </button>
       )}
 
-      {/* Interaction Banner (Screen >= 4) */}
+      {/* Interaction Banner (Screen >= 4, editable only when activity allows collaboration) */}
       {currentStep >= 4 && chosenInteraction && (
-        <button
-          className="banner-row banner-interaction"
-          onClick={() => onEditStep(3)}
-          title="Click to change interaction"
-        >
-          <span className="banner-title">{chosenInteraction.shortLabel || chosenInteraction.label}</span>
-          <span className="banner-edit-hint">
-            <Edit2 size={13} />
-          </span>
-        </button>
+        chosenActivity?.canDoTogether === false ? (
+          <div className="banner-row banner-interaction banner-static">
+            <span className="banner-title">{chosenInteraction.shortLabel || chosenInteraction.label} (Solo only)</span>
+          </div>
+        ) : (
+          <button
+            className="banner-row banner-interaction"
+            onClick={() => onEditStep(3)}
+            title="Click to change interaction"
+          >
+            <span className="banner-title">{chosenInteraction.shortLabel || chosenInteraction.label}</span>
+            <span className="banner-edit-hint">
+              <Edit2 size={13} />
+            </span>
+          </button>
+        )
       )}
 
       {/* Person Banner (Screen 5 review) */}

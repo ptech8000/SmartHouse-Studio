@@ -278,7 +278,82 @@ async function runTests() {
   assert.strictEqual(rebuilt.snapshot.activities.length, 4);
   console.log('✓ Environment JSON Export & Import round-trip passed all checks');
 
-  console.log('\n🎉 ALL 8 TEST SUITES PASSED CLEANLY!\n');
+  // Test 9: Solo-Only Activity Rules (canDoTogether: false vs true)
+  console.log('\n[9/9] Testing Solo-Only Activity Interaction Enforcement...');
+  const toiletActs = cfg.snapshot.locationActivitiesMap[9]; // toilet
+  const usingToilet = toiletActs.find(a => a.id === 11);
+  assert.ok(usingToilet && usingToilet.canDoTogether === false, 'Using toilet must be solo-only (canDoTogether: false)');
+
+  const bathActs = cfg.snapshot.locationActivitiesMap[8]; // bathroom
+  assert.strictEqual(bathActs.find(a => a.id === 5)?.canDoTogether, false, 'Using bathroom must be solo-only');
+
+  const frontDoorActs = cfg.snapshot.locationActivitiesMap[0]; // front door
+  const backDoorActs = cfg.snapshot.locationActivitiesMap[1]; // back door
+  assert.strictEqual(frontDoorActs.length, 2, 'Front door must have both Entering and Exiting house');
+  assert.strictEqual(backDoorActs.length, 2, 'Back door must have both Entering and Exiting house');
+  assert.strictEqual(frontDoorActs[0].canDoTogether, true, 'Entering house can be done together');
+
+  const kitchenActs = cfg.snapshot.locationActivitiesMap[10]; // kitchen
+  assert.strictEqual(kitchenActs.length, 7, 'Kitchen must map all 7 configured activities');
+  assert.strictEqual(kitchenActs.find(a => a.name === 'preparing meal')?.canDoTogether, true, 'Preparing meal can be done together');
+  assert.strictEqual(kitchenActs.find(a => a.name === 'using the fridge')?.canDoTogether, false, 'Using the fridge must be solo-only');
+
+  const rejectCollabOnToilet = validateAnnotationPayload({
+    client_uuid: 'solo-guard-' + Date.now(),
+    session_id: 'S_SOLO_TEST',
+    participant: 'Person_A',
+    timestamp_started: new Date(Date.now() - 2000).toISOString(),
+    timestamp_submitted: new Date().toISOString(),
+    location_id: 9,
+    activity_id: 11,
+    interaction: 'collaborative',
+    other_person: 'Person_B'
+  }, cfg.snapshot);
+  assert.strictEqual(rejectCollabOnToilet.valid, false, 'Collaborative must be rejected on solo-only activities');
+
+  const allowSoloOnToilet = validateAnnotationPayload({
+    client_uuid: 'solo-ok-' + Date.now(),
+    session_id: 'S_SOLO_TEST',
+    participant: 'Person_A',
+    timestamp_started: new Date(Date.now() - 2000).toISOString(),
+    timestamp_submitted: new Date().toISOString(),
+    location_id: 9,
+    activity_id: 11,
+    interaction: 'solo',
+    other_person: ''
+  }, cfg.snapshot);
+  assert.strictEqual(allowSoloOnToilet.valid, true, 'Solo must be accepted on solo-only activities');
+
+  // Preserve canDoTogether in custom env + JSON export/import
+  const customRuleBuilt = buildEnvironmentConfig({
+    name: 'Clinic Suite',
+    roles: ['Resident_A', 'Nurse_1'],
+    locations: [
+      {
+        name: 'Bathroom',
+        activities: [
+          { name: 'bathing', canDoTogether: false },
+          { name: 'assisted wash', canDoTogether: true }
+        ]
+      }
+    ]
+  });
+  assert.strictEqual(customRuleBuilt.valid, true);
+  const exportedRuleJson = buildEnvironmentExportPayload({
+    id: 'env_rule',
+    name: customRuleBuilt.name,
+    description: '',
+    config_hash: customRuleBuilt.hash,
+    snapshot: customRuleBuilt.snapshot
+  });
+  const importedRuleDraft = parseEnvironmentImportPayload(exportedRuleJson, 'Clinic Suite');
+  const rebuiltRuleEnv = buildEnvironmentConfig(importedRuleDraft);
+  assert.strictEqual(rebuiltRuleEnv.valid, true);
+  assert.strictEqual(rebuiltRuleEnv.snapshot.activities.find(a => a.name === 'bathing')?.canDoTogether, false);
+  assert.strictEqual(rebuiltRuleEnv.snapshot.activities.find(a => a.name === 'assisted wash')?.canDoTogether, true);
+  console.log('✓ Solo-only activity rules & JSON round-trip passed all checks');
+
+  console.log('\n🎉 ALL 9 TEST SUITES PASSED CLEANLY!\n');
 }
 
 runTests().catch(err => {

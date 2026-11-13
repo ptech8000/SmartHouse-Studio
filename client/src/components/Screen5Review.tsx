@@ -62,16 +62,25 @@ export const Screen5Review: React.FC<Screen5ReviewProps> = ({
         </div>
 
         {/* Interaction Row */}
-        <div className="review-card" onClick={() => onEditStep(3)}>
-          <div className="review-card-info">
-            <span className="review-card-label">INTERACTION</span>
-            <span className="review-card-value">{interaction.shortLabel || interaction.label}</span>
+        {activity.canDoTogether === false ? (
+          <div className="review-card review-card-static">
+            <div className="review-card-info">
+              <span className="review-card-label">INTERACTION</span>
+              <span className="review-card-value">{interaction.shortLabel || interaction.label} (Solo-only activity)</span>
+            </div>
           </div>
-          <button className="review-edit-btn" aria-label="Edit interaction">
-            <Edit2 size={16} />
-            <span>Edit</span>
-          </button>
-        </div>
+        ) : (
+          <div className="review-card" onClick={() => onEditStep(3)}>
+            <div className="review-card-info">
+              <span className="review-card-label">INTERACTION</span>
+              <span className="review-card-value">{interaction.shortLabel || interaction.label}</span>
+            </div>
+            <button className="review-edit-btn" aria-label="Edit interaction">
+              <Edit2 size={16} />
+              <span>Edit</span>
+            </button>
+          </div>
+        )}
 
         {/* Person Row (if not solo) */}
         {interaction.requiresPerson && (
@@ -107,7 +116,7 @@ export const Screen5Review: React.FC<Screen5ReviewProps> = ({
       <div className="review-actions">
         <button
           className="btn-secondary"
-          onClick={() => onEditStep(interaction.requiresPerson ? 4 : 3)}
+          onClick={() => onEditStep(activity.canDoTogether === false ? 2 : (interaction.requiresPerson ? 4 : 3))}
           disabled={isSubmitting}
         >
           <ArrowLeft size={18} style={{ marginRight: 6 }} />

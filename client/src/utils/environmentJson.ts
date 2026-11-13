@@ -1,4 +1,4 @@
-import type { ConfigSnapshot, EnvironmentDraftInput } from '../types';
+import type { ConfigSnapshot, EnvironmentActivityDraft, EnvironmentDraftInput } from '../types';
 
 export function tolerantParseJson(rawText: string, filename: string): any {
   try {
@@ -28,7 +28,11 @@ function snapshotToEnvironmentDraft(snap: ConfigSnapshot, name: string, descript
     locations: (snap.locations || []).map(loc => ({
       name: loc.name,
       shortLabel: loc.shortLabel || loc.name,
-      activities: (snap.locationActivitiesMap?.[loc.id] || []).map(a => a.name)
+      activities: (snap.locationActivitiesMap?.[loc.id] || []).map(a => ({
+        name: a.name,
+        shortLabel: a.shortLabel || a.name,
+        canDoTogether: a.canDoTogether !== false
+      }))
     }))
   };
 }
@@ -42,22 +46,27 @@ function fromPrdParts(
   description = ''
 ): EnvironmentDraftInput {
   const roles = Array.isArray(scenarioObj?.roles) ? scenarioObj.roles.map(String) : ['Person_A', 'Person_B'];
-  const actNameById = new Map<number, string>();
+  const actMetaById = new Map<number, { name: string; canDoTogether: boolean }>();
   if (Array.isArray(activitiesArr)) {
     activitiesArr.forEach(a => {
-      if (a && typeof a.name === 'string') actNameById.set(a.id, a.name);
+      if (a && typeof a.name === 'string') {
+        actMetaById.set(a.id, {
+          name: a.name,
+          canDoTogether: a.canDoTogether !== false && a.can_do_together !== false
+        });
+      }
     });
   }
 
-  const byId = new Map<number, { name: string; shortLabel?: string; activities: string[] }>();
-  const byNorm = new Map<string, { name: string; shortLabel?: string; activities: string[] }>();
+  const byId = new Map<number, { name: string; shortLabel?: string; activities: EnvironmentActivityDraft[] }>();
+  const byNorm = new Map<string, { name: string; shortLabel?: string; activities: EnvironmentActivityDraft[] }>();
 
   const draftLocations = locationsArr.map((loc, idx) => {
     const id = typeof loc.id === 'number' ? loc.id : idx;
     const item = {
       name: String(loc.name || `Location ${id}`),
       shortLabel: typeof loc.shortLabel === 'string' && loc.shortLabel.trim() ? loc.shortLabel.trim() : String(loc.name || `Location ${id}`),
-      activities: [] as string[]
+      activities: [] as EnvironmentActivityDraft[]
     };
     byId.set(id, item);
     const norm = normalizeZoneKey(item.name);
@@ -72,9 +81,16 @@ function fromPrdParts(
       (typeof entry?.location_id === 'number' ? byId.get(entry.location_id) : undefined) ||
       byNorm.get(normZone) ||
       (normZone === 'landing' ? byNorm.get('landing area') : undefined);
-    const actName = entry?.name || actNameById.get(entry?.id);
-    if (target && actName && !target.activities.includes(String(actName))) {
-      target.activities.push(String(actName));
+    const meta = actMetaById.get(entry?.id);
+    const actName = entry?.name || meta?.name;
+    const canDoTogether =
+      (entry?.canDoTogether !== false && entry?.can_do_together !== false) &&
+      (meta ? meta.canDoTogether : true);
+    if (target && actName && !target.activities.some(a => a.name === String(actName))) {
+      target.activities.push({
+        name: String(actName),
+        canDoTogether
+      });
     }
   });
 
@@ -165,7 +181,17 @@ export async function parseUploadedEnvironmentFiles(
             name: String(loc.name || ''),
             shortLabel: typeof loc.shortLabel === 'string' ? loc.shortLabel : String(loc.name || ''),
             activities: Array.isArray(loc.activities)
-              ? loc.activities.map((a: any) => (typeof a === 'string' ? a : String(a?.name || ''))).filter(Boolean)
+              ? loc.activities
+                  .map((a: any) =>
+                    typeof a === 'string'
+                      ? { name: a, canDoTogether: true }
+                      : {
+                          name: String(a?.name || ''),
+                          shortLabel: typeof a?.shortLabel === 'string' ? a.shortLabel : undefined,
+                          canDoTogether: a?.canDoTogether !== false && a?.can_do_together !== false
+                        }
+                  )
+                  .filter((a: EnvironmentActivityDraft) => Boolean(a.name))
               : []
           }))
         },

@@ -10,6 +10,7 @@ export interface ActivityItem {
   id: number;
   name: string;
   shortLabel: string;
+  canDoTogether?: boolean;
 }
 
 export interface InteractionItem {
@@ -47,10 +48,16 @@ export interface SessionItem {
   environment_name?: string;
 }
 
+export interface EnvironmentActivityDraft {
+  name: string;
+  shortLabel?: string;
+  canDoTogether?: boolean;
+}
+
 export interface EnvironmentLocationDraft {
   name: string;
   shortLabel?: string;
-  activities: string[];
+  activities: Array<string | EnvironmentActivityDraft>;
 }
 
 export interface EnvironmentDraftInput {

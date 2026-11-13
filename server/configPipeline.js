@@ -75,7 +75,13 @@ const SHORT_LABELS = {
     'ventilating bedroom_2': 'Ventilate',
     'using toilet': 'Toilet',
     'ventilating kitchen': 'Ventilate',
+    'preparing hot drink': 'Hot drink',
+    'using the fridge': 'Fridge',
+    'operating dishwasher': 'Dishwasher',
+    'operating washing machine': 'Wash machine',
     'preparing meal': 'Cooking',
+    'transitioning at kitchen': 'Transit',
+    'operating fan': 'Fan',
     'eating': 'Eating',
     'transitioning at dining': 'Transit'
   },
@@ -164,11 +170,13 @@ function loadAndValidateConfig() {
     const id = typeof act.id === 'number' ? act.id : idx;
     const name = act.name || `Activity ${id}`;
     const shortLabel = SHORT_LABELS.activities[name] || name;
+    const canDoTogether = act.canDoTogether !== false && act.can_do_together !== false;
 
     const actObj = {
       id,
       name,
-      shortLabel
+      shortLabel,
+      canDoTogether
     };
     activityMap.set(id, actObj);
     return actObj;
@@ -198,7 +206,13 @@ function loadAndValidateConfig() {
     }
 
     if (targetLocationId !== null && locationMap.has(targetLocationId)) {
-      const act = activityMap.get(actId) || { id: actId, name: entry.name, shortLabel: entry.name };
+      const entryCanDoTogether = entry.canDoTogether !== false && entry.can_do_together !== false;
+      const act = activityMap.get(actId) || {
+        id: actId,
+        name: entry.name,
+        shortLabel: SHORT_LABELS.activities[entry.name] || entry.name,
+        canDoTogether: entryCanDoTogether
+      };
       activityLocations.push({
         activityId: actId,
         locationId: targetLocationId,
@@ -386,6 +400,10 @@ function buildEnvironmentConfig(input) {
       if (seenActsInLoc.has(normAct)) return;
       seenActsInLoc.add(normAct);
 
+      const actCanDoTogether = typeof rawAct === 'object'
+        ? (rawAct?.canDoTogether !== false && rawAct?.can_do_together !== false)
+        : true;
+
       let actObj = activityByNorm.get(normAct);
       if (!actObj) {
         const actShortRaw = typeof rawAct === 'object' && typeof rawAct?.shortLabel === 'string'
@@ -394,7 +412,8 @@ function buildEnvironmentConfig(input) {
         actObj = {
           id: activities.length,
           name: actName,
-          shortLabel: (actShortRaw || SHORT_LABELS.activities[actName] || actName).slice(0, 32)
+          shortLabel: (actShortRaw || SHORT_LABELS.activities[actName] || actName).slice(0, 32),
+          canDoTogether: actCanDoTogether
         };
         activities.push(actObj);
         activityByNorm.set(normAct, actObj);
@@ -455,7 +474,8 @@ function buildEnvironmentExportPayload(env) {
     activities: (locActsMap[loc.id] || []).map(act => ({
       id: act.id,
       name: act.name,
-      shortLabel: act.shortLabel || act.name
+      shortLabel: act.shortLabel || act.name,
+      canDoTogether: act.canDoTogether !== false
     }))
   }));
 
@@ -479,7 +499,8 @@ function buildEnvironmentExportPayload(env) {
       })),
       activities: activities.map(a => ({
         id: a.id,
-        name: a.name
+        name: a.name,
+        canDoTogether: a.canDoTogether !== false
       })),
       activities_location: activityLocations.length > 0
         ? activityLocations.map(al => ({
@@ -527,7 +548,8 @@ function parseEnvironmentImportPayload(rawInput, fallbackName = '') {
         description: loc.description || '',
         activities: (snap.locationActivitiesMap?.[loc.id] || []).map(a => ({
           name: a.name,
-          shortLabel: a.shortLabel || a.name
+          shortLabel: a.shortLabel || a.name,
+          canDoTogether: a.canDoTogether !== false && a.can_do_together !== false
         }))
       }))
     };
@@ -572,10 +594,15 @@ function parseEnvironmentImportPayload(rawInput, fallbackName = '') {
       return item;
     });
 
-    const actNames = new Map();
+    const actInfo = new Map();
     if (Array.isArray(src.activities)) {
       src.activities.forEach(a => {
-        if (a && typeof a.name === 'string') actNames.set(a.id, a.name);
+        if (a && typeof a.name === 'string') {
+          actInfo.set(a.id, {
+            name: a.name,
+            canDoTogether: a.canDoTogether !== false && a.can_do_together !== false
+          });
+        }
       });
     }
 
@@ -583,11 +610,15 @@ function parseEnvironmentImportPayload(rawInput, fallbackName = '') {
       const target = typeof entry.location_id === 'number'
         ? locMap.get(entry.location_id)
         : normMap.get(ZONE_ALIASES[normalizeKey(entry.zone)] || normalizeKey(entry.zone));
-      const actName = entry.name || actNames.get(entry.id);
+      const meta = actInfo.get(entry.id);
+      const actName = entry.name || meta?.name;
+      const canDoTogether = (entry.canDoTogether !== false && entry.can_do_together !== false) &&
+        (meta ? meta.canDoTogether : true);
       if (target && actName && !target.activities.some(a => a.name === actName)) {
         target.activities.push({
           name: actName,
-          shortLabel: SHORT_LABELS.activities[actName] || actName
+          shortLabel: SHORT_LABELS.activities[actName] || actName,
+          canDoTogether
         });
       }
     });

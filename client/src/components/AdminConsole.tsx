@@ -861,26 +861,30 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             <div className="quick-inject-buttons">
               {(() => {
                 const samples: Array<{ locId: number; actId: number; label: string; interaction: string }> = [];
+                let firstCollabSample: { locId: number; actId: number; label: string } | null = null;
                 for (const loc of config?.locations || []) {
                   const acts = config?.locationActivitiesMap?.[loc.id] || [];
                   for (const act of acts) {
+                    const baseLabel = `+ ${loc.shortLabel || loc.name}: ${act.shortLabel || act.name}`;
+                    if (!firstCollabSample && act.canDoTogether !== false) {
+                      firstCollabSample = { locId: loc.id, actId: act.id, label: baseLabel };
+                    }
                     if (samples.length < 5) {
                       samples.push({
                         locId: loc.id,
                         actId: act.id,
-                        label: `+ ${loc.shortLabel || loc.name}: ${act.shortLabel || act.name} (Solo)`,
+                        label: `${baseLabel} (Solo)`,
                         interaction: 'solo'
                       });
                     }
                   }
-                  if (samples.length >= 5) break;
+                  if (samples.length >= 5 && firstCollabSample) break;
                 }
-                if (samples.length > 0 && roles.length >= 2) {
-                  const first = samples[0];
+                if (firstCollabSample && roles.length >= 2) {
                   samples.push({
-                    locId: first.locId,
-                    actId: first.actId,
-                    label: `${first.label.replace(' (Solo)', '')} (Collab)`,
+                    locId: firstCollabSample.locId,
+                    actId: firstCollabSample.actId,
+                    label: `${firstCollabSample.label} (Collab)`,
                     interaction: 'collaborative'
                   });
                 }

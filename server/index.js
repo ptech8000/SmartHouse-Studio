@@ -608,7 +608,8 @@ app.delete('/api/sessions/:id', requireAdmin, apiWriteLimiter, (req, res) => {
 app.post('/api/test/generate-annotation', requireAdmin, apiWriteLimiter, (req, res) => {
   try {
     const { session_id, participant, location_id, activity_id, interaction, other_person } = req.body || {};
-    const sId = typeof session_id === 'string' && session_id.trim() ? session_id.trim() : 'S001';
+    const sId = typeof session_id === 'string' && session_id.trim() ? session_id.trim() : '';
+    if (!sId) return res.status(400).json({ error: 'session_id is required' });
     const session = db.getSession(sId);
     if (!session) return res.status(404).json({ error: `Session "${sId}" not found` });
 
@@ -619,6 +620,7 @@ app.post('/api/test/generate-annotation', requireAdmin, apiWriteLimiter, (req, r
     const loc = snap.locations.find(l => l.id === (location_id ?? 2)) || snap.locations[0];
     const validActs = snap.locationActivitiesMap[loc.id] || snap.activities;
     const act = validActs.find(a => a.id === (activity_id ?? validActs[0]?.id)) || validActs[0];
+    const resolvedInteraction = act?.canDoTogether === false ? 'solo' : (interaction || 'solo');
 
     const now = new Date();
     const started = new Date(now.getTime() - 8000).toISOString();
@@ -632,8 +634,8 @@ app.post('/api/test/generate-annotation', requireAdmin, apiWriteLimiter, (req, r
       timestamp_submitted: submitted,
       location_id: loc.id,
       activity_id: act.id,
-      interaction: interaction || 'solo',
-      other_person: other_person || '',
+      interaction: resolvedInteraction,
+      other_person: resolvedInteraction === 'solo' ? '' : (other_person || ''),
       edited: false
     }, snap);
 
