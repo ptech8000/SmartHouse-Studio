@@ -34,7 +34,7 @@ import {
   Trash2,
   Zap,
   ExternalLink,
-  Smartphone,
+  Globe,
   Copy,
   Radio,
   CheckCircle2,
@@ -470,7 +470,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             <div className="section-head-pro">
               <div>
                 <h3>2. Live Participant URLs for Session "{currentSessionId}"</h3>
-                <p>Each participant opens their dedicated URL below (in separate browser tabs or on their mobile phones on Wi-Fi)</p>
+                <p>Share each participant's dedicated link below so they can join from any device or network (mobile data, Wi-Fi, tablet, or desktop)</p>
               </div>
               <button className="btn-ui btn-ui-accent" onClick={openAllParticipantTabs}>
                 <ExternalLink size={15} />
@@ -481,8 +481,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             <div className="participant-launch-grid">
               {roles.map(role => {
                 const queryPath = buildParticipantQuery(role);
-                const lanUrl = `${netInfo?.networkUrl || window.location.origin}${queryPath}`;
-                const localUrl = `${window.location.origin}${queryPath}`;
+                const liveBaseUrl = netInfo?.networkUrl || window.location.origin;
+                const participantUrl = `${liveBaseUrl}${queryPath}`;
                 return (
                   <div key={role} className="participant-launch-card">
                     <div className="launch-card-header">
@@ -497,27 +497,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     </div>
 
                     <div className="launch-url-group">
-                      <span className="url-type-label">Mobile Wi-Fi URL:</span>
+                      <span className="url-type-label">Participant Access URL:</span>
                       <div className="launch-url-box">
-                        <span className="launch-url-text">{lanUrl}</span>
+                        <span className="launch-url-text">{participantUrl}</span>
                         <button
                           className="btn-copy-icon"
-                          onClick={() => copyToClipboard(lanUrl, `${role} Wi-Fi`)}
-                          title="Copy Wi-Fi URL"
-                        >
-                          <Copy size={14} />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="launch-url-group">
-                      <span className="url-type-label">Local Browser URL:</span>
-                      <div className="launch-url-box">
-                        <span className="launch-url-text">{localUrl}</span>
-                        <button
-                          className="btn-copy-icon"
-                          onClick={() => copyToClipboard(localUrl, `${role} Local`)}
-                          title="Copy Local URL"
+                          onClick={() => copyToClipboard(participantUrl, role)}
+                          title={`Copy ${role} URL`}
                         >
                           <Copy size={14} />
                         </button>
@@ -528,14 +514,12 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
               })}
             </div>
 
-            {netInfo && (
-              <div className="lan-info-banner">
-                <Smartphone size={18} />
-                <span>
-                  <strong>Testing with Phones/Tablets:</strong> Connect devices to the same Wi-Fi and open the Mobile Wi-Fi URLs above (Host IP: <code>{netInfo.networkUrl}</code>).
-                </span>
-              </div>
-            )}
+            <div className="lan-info-banner">
+              <Globe size={18} />
+              <span>
+                <strong>Works Across Any Network:</strong> Participants do not need to be on the same Wi-Fi — each link works over mobile data (4G/5G), separate Wi-Fi networks, or desktop browsers (Live Host: <code>{netInfo?.networkUrl || window.location.origin}</code>).
+              </span>
+            </div>
           </section>
 
           {/* Active Collaborator Locks / Exclusivity Monitor */}
