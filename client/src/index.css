@@ -3185,7 +3185,36 @@ body {
 .modal-actions-btns {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.hidden-file-input {
+  display: none;
+}
+
+.btn-template-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.btn-template-upload:hover {
+  background: #dbeafe;
+  border-color: var(--brand-blue);
+}
+
+.env-info-banner {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e40af;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 @media (max-width: 640px) {

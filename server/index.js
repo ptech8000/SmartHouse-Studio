@@ -5,7 +5,12 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
-const { loadAndValidateConfig, buildEnvironmentConfig } = require('./configPipeline');
+const {
+  loadAndValidateConfig,
+  buildEnvironmentConfig,
+  buildEnvironmentExportPayload,
+  parseEnvironmentImportPayload
+} = require('./configPipeline');
 const db = require('./database');
 const { generateAnnotationsCsv } = require('./csvExport');
 const {
@@ -373,6 +378,28 @@ app.post('/api/config/reload', requireAdmin, apiWriteLimiter, (req, res) => {
 // 2B. ENVIRONMENTS API (Admin only)
 // ==========================================================================
 
+function createAndStoreEnvironmentFromInput(rawInput, fallbackName) {
+  const normalized = parseEnvironmentImportPayload(rawInput, fallbackName);
+  const built = buildEnvironmentConfig(normalized);
+  if (!built.valid) {
+    return { valid: false, built };
+  }
+  const slug = built.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32) || 'env';
+  const envId = `env_${slug}_${crypto.randomBytes(3).toString('hex')}`;
+  const created = db.createEnvironment({
+    id: envId,
+    name: built.name,
+    description: built.description,
+    configHash: built.hash,
+    configSnapshot: built.snapshot
+  });
+  return { valid: true, created, warnings: built.warnings };
+}
+
 app.get('/api/environments', requireAdmin, (req, res) => {
   try {
     res.json(db.listEnvironments());
@@ -383,26 +410,52 @@ app.get('/api/environments', requireAdmin, (req, res) => {
 
 app.post('/api/environments', requireAdmin, apiWriteLimiter, (req, res) => {
   try {
-    const built = buildEnvironmentConfig(req.body);
-    if (!built.valid) {
-      return res.status(400).json({ error: built.errors.join('; '), errors: built.errors, warnings: built.warnings });
+    const result = createAndStoreEnvironmentFromInput(req.body);
+    if (!result.valid) {
+      return res.status(400).json({
+        error: result.built.errors.join('; '),
+        errors: result.built.errors,
+        warnings: result.built.warnings
+      });
     }
-    const slug = built.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 32) || 'env';
-    const envId = `env_${slug}_${crypto.randomBytes(3).toString('hex')}`;
-    const created = db.createEnvironment({
-      id: envId,
-      name: built.name,
-      description: built.description,
-      configHash: built.hash,
-      configSnapshot: built.snapshot
-    });
-    res.status(201).json({ ...created, warnings: built.warnings });
+    res.status(201).json({ ...result.created, warnings: result.warnings });
   } catch (err) {
     safeServerError(res, err, 'Failed to create environment');
+  }
+});
+
+app.post('/api/environments/import', requireAdmin, apiWriteLimiter, (req, res) => {
+  try {
+    const fallbackName = typeof req.body?.name === 'string' ? req.body.name : 'Imported Environment';
+    const result = createAndStoreEnvironmentFromInput(req.body, fallbackName);
+    if (!result.valid) {
+      return res.status(400).json({
+        error: result.built.errors.join('; '),
+        errors: result.built.errors,
+        warnings: result.built.warnings
+      });
+    }
+    res.status(201).json({ ...result.created, warnings: result.warnings });
+  } catch (err) {
+    safeServerError(res, err, 'Failed to import environment JSON');
+  }
+});
+
+app.get('/api/environments/:id/export.json', requireAdmin, (req, res) => {
+  try {
+    const env = db.getEnvironment(req.params.id);
+    if (!env) return res.status(404).json({ error: 'Environment not found' });
+    const exportObj = buildEnvironmentExportPayload(env);
+    const safeFileSlug = (env.name || env.id || 'environment')
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'environment';
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFileSlug}.environment.json"`);
+    res.status(200).send(JSON.stringify(exportObj, null, 2));
+  } catch (err) {
+    safeServerError(res, err, 'Failed to export environment JSON');
   }
 });
 

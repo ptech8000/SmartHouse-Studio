@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { ConfigSnapshot, EnvironmentDraftInput, EnvironmentItem, EnvironmentLocationDraft } from '../types';
-import { createEnvironment } from '../services/api';
+import { createEnvironment, downloadEnvironmentJson } from '../services/api';
+import { parseUploadedEnvironmentFiles } from '../utils/environmentJson';
 import { useNotify } from './InAppNotifications';
-import { X, Plus, Trash2, Layers, Users, MapPin, Sparkles } from 'lucide-react';
+import { X, Plus, Trash2, Layers, Users, MapPin, Sparkles, Upload, Download } from 'lucide-react';
 
 interface EnvironmentBuilderModalProps {
   isOpen: boolean;
@@ -64,9 +65,11 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
   ]);
   const [activityInputs, setActivityInputs] = useState<Record<number, string>>({});
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [loadedSourceMsg, setLoadedSourceMsg] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const applyDraft = (draft: EnvironmentDraftInput) => {
+  const applyDraft = (draft: EnvironmentDraftInput, sourceMsg: string | null = null) => {
     setName(draft.name);
     setDescription(draft.description || '');
     setRoles(draft.roles.length > 0 ? [...draft.roles] : ['Person_A', 'Person_B']);
@@ -77,6 +80,7 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     );
     setActivityInputs({});
     setErrorMsg(null);
+    setLoadedSourceMsg(sourceMsg);
   };
 
   useEffect(() => {
@@ -87,6 +91,20 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
       applyDraft(STARTER_BLANK);
     }
   }, [isOpen, initialDraft]);
+
+  const handleJsonUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    try {
+      const { draft, sourceLabel } = await parseUploadedEnvironmentFiles(files);
+      applyDraft(draft, `Loaded configuration from ${sourceLabel}. Review or edit below and save.`);
+      notify(`Loaded "${draft.name}" from ${sourceLabel}`, 'info', 'JSON Loaded');
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Could not parse uploaded JSON file.');
+    } finally {
+      e.target.value = '';
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -170,8 +188,7 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     );
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const saveEnvironment = async (downloadAfterSave: boolean) => {
     setErrorMsg(null);
 
     if (name.trim().length < 2) {
@@ -201,7 +218,12 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
         roles,
         locations: finalLocations
       });
-      notify(`Environment "${created.name}" created!`, 'success', 'Environment Saved');
+      if (downloadAfterSave) {
+        const filename = await downloadEnvironmentJson(created.id, created.name);
+        notify(`Saved "${created.name}" and downloaded ${filename}!`, 'success', 'Environment Saved & Exported');
+      } else {
+        notify(`Environment "${created.name}" created!`, 'success', 'Environment Saved');
+      }
       onCreated(created);
       onClose();
     } catch (err: any) {
@@ -209,6 +231,11 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await saveEnvironment(false);
   };
 
   const totalActivities = locations.reduce((sum, l) => sum + l.activities.length, 0);
@@ -230,7 +257,16 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
         </div>
 
         <form onSubmit={handleSubmit} className="env-builder-form">
-          {/* Starter Templates */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            multiple
+            className="hidden-file-input"
+            onChange={handleJsonUpload}
+          />
+
+          {/* Starter Templates + JSON Upload */}
           <div className="env-template-bar">
             <span className="env-template-lbl"><Sparkles size={14} /> Quick Start:</span>
             <button
@@ -256,7 +292,20 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
                 Clone Active Environment
               </button>
             )}
+            <button
+              type="button"
+              className="btn-template-chip btn-template-upload"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Upload size={13} /> Upload JSON File
+            </button>
           </div>
+
+          {loadedSourceMsg && (
+            <div className="env-info-banner">
+              {loadedSourceMsg}
+            </div>
+          )}
 
           {errorMsg && (
             <div className="env-error-banner" role="alert">
@@ -435,6 +484,16 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
             <div className="modal-actions-btns">
               <button type="button" className="btn-ui btn-ui-secondary" onClick={onClose}>
                 Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-ui btn-ui-soft-blue"
+                disabled={isSaving}
+                onClick={() => saveEnvironment(true)}
+                title="Save this environment and immediately download its .json file"
+              >
+                <Download size={14} />
+                <span>{isSaving ? 'Saving...' : 'Save & Download JSON'}</span>
               </button>
               <button type="submit" className="btn-ui btn-ui-primary" disabled={isSaving}>
                 {isSaving ? 'Saving Environment...' : 'Save Environment'}

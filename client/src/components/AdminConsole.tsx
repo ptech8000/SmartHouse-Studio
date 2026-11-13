@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type {
   SessionSummaryItem,
   ConfigSnapshot,
@@ -10,6 +10,7 @@ import type {
 import type { MainTabType } from './AppHeader';
 import { SensorWaveform } from './SensorWaveform';
 import { EnvironmentBuilderModal, snapshotToDraft } from './EnvironmentBuilderModal';
+import { parseUploadedEnvironmentFiles } from '../utils/environmentJson';
 import { useNotify } from './InAppNotifications';
 import {
   subscribeVirtualFleet,
@@ -30,10 +31,13 @@ import {
   fetchNetworkInfo,
   fetchParticipantLinks,
   fetchEnvironments,
+  importEnvironmentJson,
+  downloadEnvironmentJson,
   deleteEnvironment
 } from '../services/api';
 import {
   Download,
+  Upload,
   Play,
   Square,
   RefreshCw,
@@ -89,6 +93,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const [filterParticipant, setFilterParticipant] = useState<string>('ALL');
   const [netInfo, setNetInfo] = useState<{ hostIp: string; protocol?: string; localUrl: string; networkUrl: string } | null>(null);
   const [participantTokens, setParticipantTokens] = useState<Record<string, string>>({});
+  const directJsonInputRef = useRef<HTMLInputElement | null>(null);
 
   const showFeedback = (msg: string, variant: 'success' | 'error' | 'warning' | 'info' = 'success', title?: string) => {
     notify(msg, variant, title);
@@ -178,6 +183,35 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       await loadEnvironments();
     } catch (err: any) {
       showFeedback(`Error deleting environment: ${err.message}`, 'error', 'Delete Failed');
+    }
+  };
+
+  const handleDownloadEnvironmentJson = async (envId: string, envName?: string) => {
+    try {
+      const filename = await downloadEnvironmentJson(envId, envName);
+      showFeedback(`Downloaded ${filename}`, 'success', 'Environment JSON Exported');
+    } catch (err: any) {
+      showFeedback(`Failed to download environment JSON: ${err.message}`, 'error', 'Export Failed');
+    }
+  };
+
+  const handleDirectImportJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    try {
+      const { draft, sourceLabel } = await parseUploadedEnvironmentFiles(files);
+      const created = await importEnvironmentJson(draft);
+      await loadEnvironments();
+      setSelectedEnvId(created.id);
+      showFeedback(
+        `Environment "${created.name}" created from ${sourceLabel} and selected!`,
+        'success',
+        'Environment Imported'
+      );
+    } catch (err: any) {
+      showFeedback(`Import failed: ${err.message}`, 'error', 'JSON Import Failed');
+    } finally {
+      e.target.value = '';
     }
   };
 
@@ -294,6 +328,14 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
 
   return (
     <div className="admin-console-pro">
+      <input
+        ref={directJsonInputRef}
+        type="file"
+        accept=".json,application/json"
+        multiple
+        className="hidden-file-input"
+        onChange={handleDirectImportJson}
+      />
       {mustChangePassword && (
         <div className="default-pw-banner" role="alert">
           <div>
@@ -382,6 +424,15 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   <Layers size={14} />
                   <span>New Environment</span>
                 </button>
+                <button
+                  type="button"
+                  className="btn-ui btn-ui-secondary"
+                  onClick={() => directJsonInputRef.current?.click()}
+                  title="Upload an exported .json file to create a new environment right away"
+                >
+                  <Upload size={14} />
+                  <span>Import JSON</span>
+                </button>
                 <button className="btn-ui btn-ui-secondary" onClick={() => { loadSessions(); loadEnvironments(); onRefreshData(); }}>
                   <RefreshCw size={14} />
                   <span>Refresh</span>
@@ -414,6 +465,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   ))
                 )}
               </select>
+              <button
+                type="button"
+                className="btn-ui btn-ui-secondary"
+                onClick={() => {
+                  const chosen = environments.find(env => env.id === selectedEnvId);
+                  handleDownloadEnvironmentJson(selectedEnvId, chosen?.name);
+                }}
+                title="Download JSON file for the selected environment"
+              >
+                <Download size={15} />
+                <span>Download JSON</span>
+              </button>
               <button type="submit" className="btn-ui btn-ui-primary" disabled={isCreatingSession}>
                 <PlusCircle size={16} />
                 <span>Create Session</span>
@@ -882,19 +945,30 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
             <div className="section-head-pro">
               <div>
                 <h3>Environments Library ({environments.length})</h3>
-                <p>Create custom smart environments with your own rooms, activities, and resident roles</p>
+                <p>Create custom environments, download an environment's JSON file, or upload a JSON file to create a new environment</p>
               </div>
-              <button
-                type="button"
-                className="btn-ui btn-ui-primary"
-                onClick={() => {
-                  setEnvBuilderDraft(null);
-                  setShowEnvBuilder(true);
-                }}
-              >
-                <PlusCircle size={15} />
-                <span>Create New Environment</span>
-              </button>
+              <div className="section-head-actions">
+                <button
+                  type="button"
+                  className="btn-ui btn-ui-secondary"
+                  onClick={() => directJsonInputRef.current?.click()}
+                  title="Upload a .json file to immediately create a new environment"
+                >
+                  <Upload size={15} />
+                  <span>Create from JSON Upload</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn-ui btn-ui-primary"
+                  onClick={() => {
+                    setEnvBuilderDraft(null);
+                    setShowEnvBuilder(true);
+                  }}
+                >
+                  <PlusCircle size={15} />
+                  <span>Create New Environment</span>
+                </button>
+              </div>
             </div>
 
             <div className="env-cards-grid">
@@ -949,6 +1023,15 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     >
                       <Play size={13} />
                       <span>Use for New Session</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ui btn-ui-secondary"
+                      onClick={() => handleDownloadEnvironmentJson(env.id, env.name)}
+                      title={`Download JSON file for ${env.name}`}
+                    >
+                      <Download size={13} />
+                      <span>Download JSON</span>
                     </button>
                     {env.snapshot && (
                       <button

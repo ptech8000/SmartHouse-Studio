@@ -435,7 +435,178 @@ function buildEnvironmentConfig(input) {
   };
 }
 
+/**
+ * Builds a clean, portable JSON export for a saved environment,
+ * including both unified schema and PRD-compatible split structures.
+ */
+function buildEnvironmentExportPayload(env) {
+  const snap = env?.snapshot || {};
+  const roles = Array.isArray(snap.roles) ? snap.roles : [];
+  const locations = Array.isArray(snap.locations) ? snap.locations : [];
+  const activities = Array.isArray(snap.activities) ? snap.activities : [];
+  const locActsMap = snap.locationActivitiesMap || {};
+  const activityLocations = Array.isArray(snap.activityLocations) ? snap.activityLocations : [];
+
+  const structuredLocations = locations.map(loc => ({
+    id: loc.id,
+    name: loc.name,
+    shortLabel: loc.shortLabel || loc.name,
+    description: loc.description || '',
+    activities: (locActsMap[loc.id] || []).map(act => ({
+      id: act.id,
+      name: act.name,
+      shortLabel: act.shortLabel || act.name
+    }))
+  }));
+
+  return {
+    format: 'smarthouse-environment-v1',
+    exportedAt: new Date().toISOString(),
+    name: env.name || 'Imported Environment',
+    description: env.description || '',
+    roles,
+    locations: structuredLocations,
+    sensors: snap.sensors || null,
+    prdFiles: {
+      scenario: {
+        'resident number': roles.length,
+        roles
+      },
+      locations: locations.map(l => ({
+        id: l.id,
+        name: l.name,
+        description: l.description || ''
+      })),
+      activities: activities.map(a => ({
+        id: a.id,
+        name: a.name
+      })),
+      activities_location: activityLocations.length > 0
+        ? activityLocations.map(al => ({
+            id: al.activityId,
+            name: al.activityName,
+            zone: al.locationName,
+            location_id: al.locationId
+          }))
+        : structuredLocations.flatMap(loc =>
+            loc.activities.map(act => ({
+              id: act.id,
+              name: act.name,
+              zone: loc.name,
+              location_id: loc.id
+            }))
+          ),
+      sensors: snap.sensors || null
+    }
+  };
+}
+
+/**
+ * Normalizes any supported Environment JSON upload shape into a draft input
+ * for buildEnvironmentConfig().
+ */
+function parseEnvironmentImportPayload(rawInput, fallbackName = '') {
+  const data = rawInput && typeof rawInput === 'object' ? rawInput : {};
+  const cleanFallback = typeof fallbackName === 'string' && fallbackName.trim()
+    ? fallbackName.trim()
+    : 'Imported Environment';
+
+  // Case A: Saved Environment record or Snapshot with locationActivitiesMap
+  const snap = data.snapshot && typeof data.snapshot === 'object'
+    ? data.snapshot
+    : (data.locationActivitiesMap ? data : null);
+  if (snap && Array.isArray(snap.locations) && Array.isArray(snap.roles)) {
+    return {
+      name: (typeof data.name === 'string' && data.name.trim()) ? data.name.trim() : cleanFallback,
+      description: typeof data.description === 'string' ? data.description.trim() : '',
+      roles: snap.roles,
+      sensors: snap.sensors || data.sensors || null,
+      locations: snap.locations.map(loc => ({
+        name: loc.name,
+        shortLabel: loc.shortLabel || loc.name,
+        description: loc.description || '',
+        activities: (snap.locationActivitiesMap?.[loc.id] || []).map(a => ({
+          name: a.name,
+          shortLabel: a.shortLabel || a.name
+        }))
+      }))
+    };
+  }
+
+  // Case B: Portable smarthouse-environment-v1 or simplified { name, roles, locations: [{ name, activities }] }
+  if (Array.isArray(data.locations) && Array.isArray(data.roles) &&
+      data.locations.some(l => Array.isArray(l?.activities))) {
+    return {
+      name: (typeof data.name === 'string' && data.name.trim()) ? data.name.trim() : cleanFallback,
+      description: typeof data.description === 'string' ? data.description.trim() : '',
+      roles: data.roles,
+      sensors: data.sensors || null,
+      locations: data.locations.map(loc => ({
+        name: loc.name,
+        shortLabel: loc.shortLabel || loc.name,
+        description: loc.description || '',
+        activities: Array.isArray(loc.activities) ? loc.activities : []
+      }))
+    };
+  }
+
+  // Case C: Classic PRD split structure inside wrapper or top-level (scenario + locations + activities_location)
+  const src = data.prdFiles && typeof data.prdFiles === 'object' ? data.prdFiles : data;
+  if (src.scenario && Array.isArray(src.locations) && Array.isArray(src.activities_location)) {
+    const roles = Array.isArray(src.scenario.roles) ? src.scenario.roles : [];
+    const locMap = new Map();
+    const normMap = new Map();
+    const mappedLocations = src.locations.map((loc, idx) => {
+      const id = typeof loc.id === 'number' ? loc.id : idx;
+      const item = {
+        id,
+        name: loc.name || `Location ${id}`,
+        shortLabel: loc.shortLabel || SHORT_LABELS.locations[normalizeKey(loc.name)] || loc.name || `Location ${id}`,
+        description: loc.description || '',
+        activities: []
+      };
+      locMap.set(id, item);
+      const norm = ZONE_ALIASES[normalizeKey(item.name)] || normalizeKey(item.name);
+      normMap.set(norm, item);
+      normMap.set(normalizeKey(item.name), item);
+      return item;
+    });
+
+    const actNames = new Map();
+    if (Array.isArray(src.activities)) {
+      src.activities.forEach(a => {
+        if (a && typeof a.name === 'string') actNames.set(a.id, a.name);
+      });
+    }
+
+    src.activities_location.forEach(entry => {
+      const target = typeof entry.location_id === 'number'
+        ? locMap.get(entry.location_id)
+        : normMap.get(ZONE_ALIASES[normalizeKey(entry.zone)] || normalizeKey(entry.zone));
+      const actName = entry.name || actNames.get(entry.id);
+      if (target && actName && !target.activities.some(a => a.name === actName)) {
+        target.activities.push({
+          name: actName,
+          shortLabel: SHORT_LABELS.activities[actName] || actName
+        });
+      }
+    });
+
+    return {
+      name: (typeof data.name === 'string' && data.name.trim()) ? data.name.trim() : cleanFallback,
+      description: typeof data.description === 'string' ? data.description.trim() : '',
+      roles,
+      sensors: src.sensors || data.sensors || null,
+      locations: mappedLocations
+    };
+  }
+
+  return data;
+}
+
 module.exports = {
   loadAndValidateConfig,
-  buildEnvironmentConfig
+  buildEnvironmentConfig,
+  buildEnvironmentExportPayload,
+  parseEnvironmentImportPayload
 };

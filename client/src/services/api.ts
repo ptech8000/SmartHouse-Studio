@@ -143,6 +143,39 @@ export async function createEnvironment(draft: EnvironmentDraftInput): Promise<E
   return res.json();
 }
 
+export async function importEnvironmentJson(payload: unknown): Promise<EnvironmentItem> {
+  const res = await apiFetch('/environments/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) throw await parseError(res, 'Failed to import environment JSON');
+  return res.json();
+}
+
+export async function downloadEnvironmentJson(id: string, envName?: string): Promise<string> {
+  const res = await apiFetch(`/environments/${encodeURIComponent(id)}/export.json`);
+  if (!res.ok) throw await parseError(res, 'Failed to download environment JSON');
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const fallbackSlug = (envName || id || 'environment')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'environment';
+  const filename = match?.[1] || `${fallbackSlug}.environment.json`;
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return filename;
+}
+
 export async function deleteEnvironment(id: string): Promise<{ success: boolean; id: string }> {
   const res = await apiFetch(`/environments/${encodeURIComponent(id)}`, {
     method: 'DELETE'

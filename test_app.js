@@ -1,5 +1,10 @@
 const assert = require('assert');
-const { loadAndValidateConfig, buildEnvironmentConfig } = require('./server/configPipeline');
+const {
+  loadAndValidateConfig,
+  buildEnvironmentConfig,
+  buildEnvironmentExportPayload,
+  parseEnvironmentImportPayload
+} = require('./server/configPipeline');
 const db = require('./server/database');
 const { generateAnnotationsCsv } = require('./server/csvExport');
 const { hashPassword, verifyPassword, validateAnnotationPayload, validateSessionId } = require('./server/security');
@@ -239,7 +244,41 @@ async function runTests() {
   db.deleteSession(pairSessId);
   console.log('✓ Unrestricted multi-person pairing passed all checks');
 
-  console.log('\n🎉 ALL 7 TEST SUITES PASSED CLEANLY!\n');
+  // Test 8: Environment JSON Export & Upload/Import Round-Trip
+  console.log('\n[8/8] Testing Environment JSON Export & Import Round-Trip...');
+  const srcBuilt = buildEnvironmentConfig({
+    name: 'Smart Loft 4A',
+    description: 'Export/import verification layout',
+    roles: ['Roommate_A', 'Roommate_B', 'Assistant_A'],
+    locations: [
+      { name: 'Kitchen', shortLabel: 'Kitchen', activities: ['Preparing hot drink', 'Preparing meals'] },
+      { name: 'Living', shortLabel: 'Living', activities: ['Operating TV', 'Relaxing on couch'] }
+    ]
+  });
+  assert.strictEqual(srcBuilt.valid, true);
+  const srcEnv = {
+    id: 'env_src',
+    name: srcBuilt.name,
+    description: srcBuilt.description,
+    config_hash: srcBuilt.hash,
+    snapshot: srcBuilt.snapshot
+  };
+
+  const exportedJson = buildEnvironmentExportPayload(srcEnv);
+  assert.strictEqual(exportedJson.format, 'smarthouse-environment-v1');
+  assert.strictEqual(exportedJson.name, 'Smart Loft 4A');
+  assert.ok(exportedJson.prdFiles && exportedJson.prdFiles.scenario && exportedJson.prdFiles.activities_location);
+
+  const importedDraft = parseEnvironmentImportPayload(exportedJson, 'Fallback');
+  const rebuilt = buildEnvironmentConfig(importedDraft);
+  assert.strictEqual(rebuilt.valid, true, 'Re-imported JSON must build cleanly');
+  assert.strictEqual(rebuilt.name, 'Smart Loft 4A');
+  assert.deepStrictEqual(rebuilt.snapshot.roles, ['Roommate_A', 'Roommate_B', 'Assistant_A']);
+  assert.strictEqual(rebuilt.snapshot.locations.length, 2);
+  assert.strictEqual(rebuilt.snapshot.activities.length, 4);
+  console.log('✓ Environment JSON Export & Import round-trip passed all checks');
+
+  console.log('\n🎉 ALL 8 TEST SUITES PASSED CLEANLY!\n');
 }
 
 runTests().catch(err => {
