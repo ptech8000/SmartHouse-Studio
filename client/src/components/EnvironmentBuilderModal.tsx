@@ -11,7 +11,7 @@ import { createEnvironment, downloadEnvironmentJson } from '../services/api';
 import { parseUploadedEnvironmentFiles } from '../utils/environmentJson';
 import { ALL_INTERACTION_KEYS, INTERACTION_KEY_LABELS, resolveAllowedInteractionKeys } from '../utils/interactions';
 import { useNotify } from './InAppNotifications';
-import { X, Plus, Trash2, Layers, Users, MapPin, Sparkles, Upload, Download } from 'lucide-react';
+import { X, Plus, Trash2, Layers, Users, MapPin, Sparkles, Upload, Download, Check } from 'lucide-react';
 
 interface EnvironmentBuilderModalProps {
   isOpen: boolean;
@@ -120,6 +120,53 @@ export function snapshotToDraft(snapshot: ConfigSnapshot, namePrefix = 'Custom C
   };
 }
 
+interface InteractionSelectorProps {
+  value: InteractionKey[];
+  ariaLabel: string;
+  onToggleKey: (key: InteractionKey) => void;
+  onApplyPreset: (preset: InteractionKey[]) => void;
+}
+
+const InteractionSelector: React.FC<InteractionSelectorProps> = ({
+  value,
+  ariaLabel,
+  onToggleKey,
+  onApplyPreset
+}) => {
+  const isSoloOnly = value.length === 1 && value[0] === 'solo';
+  return (
+    <div className="inter-selector-wrap" role="group" aria-label={ariaLabel}>
+      {ALL_INTERACTION_KEYS.map(key => {
+        const checked = value.includes(key);
+        const label = INTERACTION_KEY_LABELS[key];
+        return (
+          <button
+            key={key}
+            type="button"
+            className={`inter-check-btn ${checked ? `is-checked mode-${key}` : 'is-unchecked'}`}
+            aria-pressed={checked}
+            onClick={() => onToggleKey(key)}
+            title={`${checked ? 'Enabled' : 'Disabled'}: ${label} (click to ${checked ? 'disable' : 'enable'})`}
+          >
+            <span className="inter-checkbox-box" aria-hidden="true">
+              {checked && <Check size={10} strokeWidth={3} />}
+            </span>
+            <span>{label}</span>
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        className="inter-preset-btn"
+        onClick={() => onApplyPreset(isSoloOnly ? [...ALL_INTERACTION_KEYS] : ['solo'])}
+        title={isSoloOnly ? 'Enable Solo, Collab, and Assisted' : 'Set to Solo only (skips interaction step on device)'}
+      >
+        {isSoloOnly ? 'All 3' : 'Solo only'}
+      </button>
+    </div>
+  );
+};
+
 export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = ({
   isOpen,
   initialDraft,
@@ -136,6 +183,7 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     { name: 'Main Room', shortLabel: 'Main Room', activities: ['working', 'resting'] }
   ]);
   const [activityInputs, setActivityInputs] = useState<Record<number, string>>({});
+  const [pendingActivityModes, setPendingActivityModes] = useState<Record<number, InteractionKey[]>>({});
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [loadedSourceMsg, setLoadedSourceMsg] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -148,9 +196,10 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     setLocations(
       draft.locations.length > 0
         ? draft.locations.map(l => ({ ...l, activities: l.activities.map(toActDraft) }))
-        : [{ name: 'Main Room', shortLabel: 'Main Room', activities: [{ name: 'activity 1', canDoTogether: true }] }]
+        : [{ name: 'Main Room', shortLabel: 'Main Room', activities: [{ name: 'activity 1', allowedInteractions: [...ALL_INTERACTION_KEYS], canDoTogether: true }] }]
     );
     setActivityInputs({});
+    setPendingActivityModes({});
     setErrorMsg(null);
     setLoadedSourceMsg(sourceMsg);
   };
@@ -233,9 +282,24 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     );
   };
 
+  const toggleKeyInList = (
+    current: InteractionKey[],
+    key: InteractionKey,
+    labelForError: string
+  ): InteractionKey[] | null => {
+    if (current.includes(key) && current.length === 1) {
+      setErrorMsg(`${labelForError} must keep at least one interaction mode (Solo, Collab, or Assisted).`);
+      return null;
+    }
+    return current.includes(key)
+      ? current.filter(k => k !== key)
+      : ALL_INTERACTION_KEYS.filter(k => k === key || current.includes(k));
+  };
+
   const handleAddActivity = (locIdx: number) => {
     const raw = (activityInputs[locIdx] || '').trim();
     if (!raw) return;
+    const chosenModes = pendingActivityModes[locIdx] || [...ALL_INTERACTION_KEYS];
     setLocations(prev =>
       prev.map((loc, idx) => {
         if (idx !== locIdx) return loc;
@@ -245,7 +309,11 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
           ...loc,
           activities: [
             ...normalized,
-            { name: raw, allowedInteractions: [...ALL_INTERACTION_KEYS], canDoTogether: true }
+            {
+              name: raw,
+              allowedInteractions: [...chosenModes],
+              canDoTogether: chosenModes.some(k => k !== 'solo')
+            }
           ]
         };
       })
@@ -254,31 +322,59 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     setErrorMsg(null);
   };
 
-  const handleToggleActivityInteraction = (locIdx: number, actIdx: number, key: InteractionKey) => {
+  const setActivityModes = (locIdx: number, actIdx: number, nextModes: InteractionKey[]) => {
     setErrorMsg(null);
     setLocations(prev =>
       prev.map((loc, idx) => {
         if (idx !== locIdx) return loc;
         const normalized = loc.activities.map(toActDraft);
-        const updated = normalized.map((act, j) => {
-          if (j !== actIdx) return act;
-          const current = resolveAllowedInteractionKeys(act);
-          if (current.includes(key) && current.length === 1) {
-            setErrorMsg(`"${act.name}" must keep at least one interaction mode (Solo, Collab, or Assisted).`);
-            return act;
-          }
-          const next = current.includes(key)
-            ? current.filter(k => k !== key)
-            : ALL_INTERACTION_KEYS.filter(k => k === key || current.includes(k));
-          return {
-            ...act,
-            allowedInteractions: next,
-            canDoTogether: next.some(k => k !== 'solo')
-          };
-        });
+        const updated = normalized.map((act, j) =>
+          j === actIdx
+            ? {
+                ...act,
+                allowedInteractions: [...nextModes],
+                canDoTogether: nextModes.some(k => k !== 'solo')
+              }
+            : act
+        );
         return { ...loc, activities: updated };
       })
     );
+  };
+
+  const handleToggleActivityInteraction = (locIdx: number, actIdx: number, key: InteractionKey) => {
+    const rawAct = locations[locIdx]?.activities?.[actIdx];
+    if (!rawAct) return;
+    const act = toActDraft(rawAct);
+    const current = resolveAllowedInteractionKeys(act);
+    const next = toggleKeyInList(current, key, `"${act.name}"`);
+    if (next) setActivityModes(locIdx, actIdx, next);
+  };
+
+  const setAllRoomActivitiesModes = (locIdx: number, nextModes: InteractionKey[]) => {
+    setErrorMsg(null);
+    setLocations(prev =>
+      prev.map((loc, idx) => {
+        if (idx !== locIdx) return loc;
+        return {
+          ...loc,
+          activities: loc.activities.map(raw => ({
+            ...toActDraft(raw),
+            allowedInteractions: [...nextModes],
+            canDoTogether: nextModes.some(k => k !== 'solo')
+          }))
+        };
+      })
+    );
+  };
+
+  const handleTogglePendingMode = (locIdx: number, key: InteractionKey) => {
+    const current = pendingActivityModes[locIdx] || [...ALL_INTERACTION_KEYS];
+    const next = toggleKeyInList(current, key, 'New activity');
+    if (next) {
+      setErrorMsg(null);
+      setPendingActivityModes(prev => ({ ...prev, [locIdx]: next }));
+    }
   };
 
   const handleRemoveActivity = (locIdx: number, actIdx: number) => {
@@ -305,9 +401,14 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
     // Flush any uncommitted activity inputs typed inside location boxes
     const finalLocations = locations.map((loc, idx) => {
       const pendingAct = (activityInputs[idx] || '').trim();
+      const pendingModes = pendingActivityModes[idx] || [...ALL_INTERACTION_KEYS];
       const acts = loc.activities.map(toActDraft);
       if (pendingAct && !acts.some(a => a.name.toLowerCase() === pendingAct.toLowerCase())) {
-        acts.push({ name: pendingAct, allowedInteractions: [...ALL_INTERACTION_KEYS], canDoTogether: true });
+        acts.push({
+          name: pendingAct,
+          allowedInteractions: [...pendingModes],
+          canDoTogether: pendingModes.some(k => k !== 'solo')
+        });
       }
       return {
         name: loc.name.trim(),
@@ -537,67 +638,96 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
                   </div>
 
                   <div className="env-acts-wrap">
-                    <span className="env-acts-lbl">Activities ({loc.activities.length}) — toggle allowed modes per activity (Solo / Collab / Assisted):</span>
-                    <div className="env-chip-list">
+                    <div className="env-acts-header">
+                      <span className="env-acts-lbl">Activities ({loc.activities.length})</span>
+                      <div className="env-room-bulk-actions">
+                        <button
+                          type="button"
+                          className="inter-preset-btn"
+                          onClick={() => setAllRoomActivitiesModes(locIdx, ['solo'])}
+                          title="Mark every activity in this room as Solo only"
+                        >
+                          All → Solo only
+                        </button>
+                        <button
+                          type="button"
+                          className="inter-preset-btn"
+                          onClick={() => setAllRoomActivitiesModes(locIdx, [...ALL_INTERACTION_KEYS])}
+                          title="Enable Solo, Collab, and Assisted on every activity in this room"
+                        >
+                          All → All 3
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="env-activity-rows">
                       {loc.activities.map((rawAct, actIdx) => {
                         const act = toActDraft(rawAct);
                         const allowed = resolveAllowedInteractionKeys(act);
+                        const soloOnly = allowed.length === 1 && allowed[0] === 'solo';
                         return (
-                          <span key={`${locIdx}-${act.name}-${actIdx}`} className="env-act-chip">
-                            <span className="env-act-name">{act.name}</span>
-                            <span className="chip-inter-group" role="group" aria-label={`Allowed modes for ${act.name}`}>
-                              {ALL_INTERACTION_KEYS.map(key => {
-                                const isOn = allowed.includes(key);
-                                const shortLbl = INTERACTION_KEY_LABELS[key];
-                                return (
-                                  <button
-                                    key={key}
-                                    type="button"
-                                    className={`chip-inter-btn ${isOn ? `is-on mode-${key}` : 'is-off'}`}
-                                    aria-pressed={isOn}
-                                    onClick={() => handleToggleActivityInteraction(locIdx, actIdx, key)}
-                                    title={`${isOn ? 'Enabled' : 'Disabled'}: ${shortLbl} — click to toggle`}
-                                  >
-                                    {shortLbl}
-                                  </button>
-                                );
-                              })}
-                            </span>
-                            <button
-                              type="button"
-                              className="chip-remove-btn"
-                              onClick={() => handleRemoveActivity(locIdx, actIdx)}
-                              title={`Remove ${act.name}`}
-                              aria-label={`Remove ${act.name}`}
-                            >
-                              <X size={12} />
-                            </button>
-                          </span>
+                          <div key={`${locIdx}-${act.name}-${actIdx}`} className="env-activity-row">
+                            <div className="env-act-row-left">
+                              <span className="env-act-row-name">{act.name}</span>
+                              {soloOnly && <span className="env-act-solo-tag">Solo only</span>}
+                            </div>
+                            <div className="env-act-row-right">
+                              <InteractionSelector
+                                value={allowed}
+                                ariaLabel={`Allowed modes for ${act.name}`}
+                                onToggleKey={key => handleToggleActivityInteraction(locIdx, actIdx, key)}
+                                onApplyPreset={preset => setActivityModes(locIdx, actIdx, preset)}
+                              />
+                              <button
+                                type="button"
+                                className="chip-remove-btn row-remove-btn"
+                                onClick={() => handleRemoveActivity(locIdx, actIdx)}
+                                title={`Remove ${act.name}`}
+                                aria-label={`Remove ${act.name}`}
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          </div>
                         );
                       })}
                     </div>
 
-                    <div className="env-inline-add">
-                      <input
-                        type="text"
-                        className="ui-input"
-                        placeholder="Add activity in this room (e.g. cooking, reading)..."
-                        value={activityInputs[locIdx] || ''}
-                        onChange={e => setActivityInputs(prev => ({ ...prev, [locIdx]: e.target.value }))}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddActivity(locIdx);
-                          }
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="btn-ui btn-ui-secondary"
-                        onClick={() => handleAddActivity(locIdx)}
-                      >
-                        <Plus size={14} /> Add Activity
-                      </button>
+                    <div className="env-add-activity-box">
+                      <div className="env-inline-add">
+                        <input
+                          type="text"
+                          className="ui-input"
+                          placeholder="Add activity in this room (e.g. cooking, reading)..."
+                          value={activityInputs[locIdx] || ''}
+                          onChange={e => setActivityInputs(prev => ({ ...prev, [locIdx]: e.target.value }))}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddActivity(locIdx);
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn-ui btn-ui-secondary"
+                          onClick={() => handleAddActivity(locIdx)}
+                        >
+                          <Plus size={14} /> Add Activity
+                        </button>
+                      </div>
+                      <div className="env-add-modes-bar">
+                        <span className="env-add-modes-lbl">Options for next activity:</span>
+                        <InteractionSelector
+                          value={pendingActivityModes[locIdx] || ALL_INTERACTION_KEYS}
+                          ariaLabel={`Options for new activity in ${loc.name}`}
+                          onToggleKey={key => handleTogglePendingMode(locIdx, key)}
+                          onApplyPreset={preset => {
+                            setErrorMsg(null);
+                            setPendingActivityModes(prev => ({ ...prev, [locIdx]: preset }));
+                          }}
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
