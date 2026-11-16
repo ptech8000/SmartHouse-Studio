@@ -33,17 +33,16 @@ function formatEventDateTime(isoString, timeZone = 'Europe/Paris') {
 
     const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
     const hour = map.hour === '24' ? '00' : map.hour;
-    const ms = String(d.getMilliseconds()).padStart(3, '0');
     return {
       date: `${map.year}-${map.month}-${map.day}`,
-      time: `${hour}:${map.minute}:${map.second}.${ms}`
+      time: `${hour}:${map.minute}:${map.second}`
     };
   } catch {
     // Fallback to UTC parts if timezone string is invalid
     const iso = d.toISOString();
     return {
       date: iso.slice(0, 10),
-      time: iso.slice(11, 23)
+      time: iso.slice(11, 19)
     };
   }
 }

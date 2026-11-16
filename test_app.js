@@ -78,7 +78,7 @@ async function runTests() {
   const expectedHeaders = 'session_id,participant,annotation_id,date,time_started,time_submitted,duration_sec,timezone,timestamp_submitted,timestamp_started,location_id,location,activity_id,activity,interaction,other_person,edited,config_version';
   assert.strictEqual(lines[0], expectedHeaders, 'CSV header must include event date, times, and PRD §8 columns');
   assert.ok(lines[1].includes(testSessionId), 'CSV row must contain testSessionId');
-  assert.ok(/\d{4}-\d{2}-\d{2},\d{2}:\d{2}:\d{2}\.\d{3},\d{2}:\d{2}:\d{2}\.\d{3}/.test(lines[1]), 'CSV row must contain formatted event date, time_started, and time_submitted');
+  assert.ok(/\d{4}-\d{2}-\d{2},\d{2}:\d{2}:\d{2},\d{2}:\d{2}:\d{2}/.test(lines[1]), 'CSV row must contain formatted event date, time_started (HH:MM:SS), and time_submitted (HH:MM:SS)');
   assert.ok(lines[1].includes('Person_A'), 'CSV row must contain participant');
   assert.ok(lines[1].includes('vacuuming living'), 'CSV row must contain activity');
   console.log('✓ CSV Export strictly matches event date/time + PRD §8');
