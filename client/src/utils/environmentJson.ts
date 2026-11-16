@@ -1,4 +1,5 @@
-import type { ConfigSnapshot, EnvironmentActivityDraft, EnvironmentDraftInput } from '../types';
+import type { ConfigSnapshot, EnvironmentActivityDraft, EnvironmentDraftInput, InteractionKey } from '../types';
+import { resolveAllowedInteractionKeys } from './interactions';
 
 export function tolerantParseJson(rawText: string, filename: string): any {
   try {
@@ -28,11 +29,15 @@ function snapshotToEnvironmentDraft(snap: ConfigSnapshot, name: string, descript
     locations: (snap.locations || []).map(loc => ({
       name: loc.name,
       shortLabel: loc.shortLabel || loc.name,
-      activities: (snap.locationActivitiesMap?.[loc.id] || []).map(a => ({
-        name: a.name,
-        shortLabel: a.shortLabel || a.name,
-        canDoTogether: a.canDoTogether !== false
-      }))
+      activities: (snap.locationActivitiesMap?.[loc.id] || []).map(a => {
+        const allowedInteractions = resolveAllowedInteractionKeys(a);
+        return {
+          name: a.name,
+          shortLabel: a.shortLabel || a.name,
+          allowedInteractions,
+          canDoTogether: allowedInteractions.some(k => k !== 'solo')
+        };
+      })
     }))
   };
 }
@@ -46,13 +51,13 @@ function fromPrdParts(
   description = ''
 ): EnvironmentDraftInput {
   const roles = Array.isArray(scenarioObj?.roles) ? scenarioObj.roles.map(String) : ['Person_A', 'Person_B'];
-  const actMetaById = new Map<number, { name: string; canDoTogether: boolean }>();
+  const actMetaById = new Map<number, { name: string; allowedInteractions: InteractionKey[] }>();
   if (Array.isArray(activitiesArr)) {
     activitiesArr.forEach(a => {
       if (a && typeof a.name === 'string') {
         actMetaById.set(a.id, {
           name: a.name,
-          canDoTogether: a.canDoTogether !== false && a.can_do_together !== false
+          allowedInteractions: resolveAllowedInteractionKeys(a)
         });
       }
     });
@@ -83,13 +88,19 @@ function fromPrdParts(
       (normZone === 'landing' ? byNorm.get('landing area') : undefined);
     const meta = actMetaById.get(entry?.id);
     const actName = entry?.name || meta?.name;
-    const canDoTogether =
-      (entry?.canDoTogether !== false && entry?.can_do_together !== false) &&
-      (meta ? meta.canDoTogether : true);
+    const hasEntryOverride =
+      Array.isArray(entry?.allowedInteractions) ||
+      Array.isArray(entry?.allowed_interactions) ||
+      typeof entry?.canDoTogether === 'boolean' ||
+      typeof entry?.can_do_together === 'boolean';
+    const allowedInteractions = hasEntryOverride
+      ? resolveAllowedInteractionKeys(entry)
+      : (meta ? meta.allowedInteractions : resolveAllowedInteractionKeys(entry));
     if (target && actName && !target.activities.some(a => a.name === String(actName))) {
       target.activities.push({
         name: String(actName),
-        canDoTogether
+        allowedInteractions,
+        canDoTogether: allowedInteractions.some(k => k !== 'solo')
       });
     }
   });
@@ -182,15 +193,19 @@ export async function parseUploadedEnvironmentFiles(
             shortLabel: typeof loc.shortLabel === 'string' ? loc.shortLabel : String(loc.name || ''),
             activities: Array.isArray(loc.activities)
               ? loc.activities
-                  .map((a: any) =>
-                    typeof a === 'string'
-                      ? { name: a, canDoTogether: true }
-                      : {
-                          name: String(a?.name || ''),
-                          shortLabel: typeof a?.shortLabel === 'string' ? a.shortLabel : undefined,
-                          canDoTogether: a?.canDoTogether !== false && a?.can_do_together !== false
-                        }
-                  )
+                  .map((a: any) => {
+                    if (typeof a === 'string') {
+                      const allowedInteractions = resolveAllowedInteractionKeys(null);
+                      return { name: a, allowedInteractions, canDoTogether: true };
+                    }
+                    const allowedInteractions = resolveAllowedInteractionKeys(a);
+                    return {
+                      name: String(a?.name || ''),
+                      shortLabel: typeof a?.shortLabel === 'string' ? a.shortLabel : undefined,
+                      allowedInteractions,
+                      canDoTogether: allowedInteractions.some(k => k !== 'solo')
+                    };
+                  })
                   .filter((a: EnvironmentActivityDraft) => Boolean(a.name))
               : []
           }))

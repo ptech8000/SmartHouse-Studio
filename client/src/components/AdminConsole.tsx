@@ -11,6 +11,7 @@ import type { MainTabType } from './AppHeader';
 import { SensorWaveform } from './SensorWaveform';
 import { EnvironmentBuilderModal, snapshotToDraft } from './EnvironmentBuilderModal';
 import { parseUploadedEnvironmentFiles } from '../utils/environmentJson';
+import { resolveAllowedInteractionKeys } from '../utils/interactions';
 import { useNotify } from './InAppNotifications';
 import {
   subscribeVirtualFleet,
@@ -866,15 +867,18 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   const acts = config?.locationActivitiesMap?.[loc.id] || [];
                   for (const act of acts) {
                     const baseLabel = `+ ${loc.shortLabel || loc.name}: ${act.shortLabel || act.name}`;
-                    if (!firstCollabSample && act.canDoTogether !== false) {
+                    const allowedKeys = resolveAllowedInteractionKeys(act);
+                    if (!firstCollabSample && allowedKeys.includes('collaborative')) {
                       firstCollabSample = { locId: loc.id, actId: act.id, label: baseLabel };
                     }
                     if (samples.length < 5) {
+                      const sampleKey = allowedKeys.includes('solo') ? 'solo' : allowedKeys[0];
+                      const shortTag = sampleKey === 'collaborative' ? 'Collab' : sampleKey === 'assistive' ? 'Assisted' : 'Solo';
                       samples.push({
                         locId: loc.id,
                         actId: act.id,
-                        label: `${baseLabel} (Solo)`,
-                        interaction: 'solo'
+                        label: `${baseLabel} (${shortTag})`,
+                        interaction: sampleKey
                       });
                     }
                   }

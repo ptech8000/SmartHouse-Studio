@@ -4,10 +4,12 @@ import type {
   EnvironmentActivityDraft,
   EnvironmentDraftInput,
   EnvironmentItem,
-  EnvironmentLocationDraft
+  EnvironmentLocationDraft,
+  InteractionKey
 } from '../types';
 import { createEnvironment, downloadEnvironmentJson } from '../services/api';
 import { parseUploadedEnvironmentFiles } from '../utils/environmentJson';
+import { ALL_INTERACTION_KEYS, INTERACTION_KEY_LABELS, resolveAllowedInteractionKeys } from '../utils/interactions';
 import { useNotify } from './InAppNotifications';
 import { X, Plus, Trash2, Layers, Users, MapPin, Sparkles, Upload, Download } from 'lucide-react';
 
@@ -37,53 +39,64 @@ const STARTER_APARTMENT: EnvironmentDraftInput = {
       name: 'Kitchen',
       shortLabel: 'Kitchen',
       activities: [
-        { name: 'preparing meal', canDoTogether: true },
-        { name: 'washing dishes', canDoTogether: false },
-        { name: 'cleaning', canDoTogether: false }
+        { name: 'preparing meal', allowedInteractions: ['solo', 'collaborative', 'assistive'] },
+        { name: 'washing dishes', allowedInteractions: ['solo'] },
+        { name: 'cleaning', allowedInteractions: ['solo'] }
       ]
     },
     {
       name: 'Living Room',
       shortLabel: 'Living',
       activities: [
-        { name: 'watching TV', canDoTogether: false },
-        { name: 'resting on couch', canDoTogether: true },
-        { name: 'vacuuming', canDoTogether: false }
+        { name: 'watching TV', allowedInteractions: ['solo'] },
+        { name: 'resting on couch', allowedInteractions: ['solo', 'collaborative', 'assistive'] },
+        { name: 'vacuuming', allowedInteractions: ['solo'] }
       ]
     },
     {
       name: 'Bedroom',
       shortLabel: 'Bedroom',
       activities: [
-        { name: 'sleeping', canDoTogether: false },
-        { name: 'dressing', canDoTogether: false },
-        { name: 'reading', canDoTogether: false }
+        { name: 'sleeping', allowedInteractions: ['solo'] },
+        { name: 'dressing', allowedInteractions: ['solo', 'assistive'] },
+        { name: 'reading', allowedInteractions: ['solo'] }
       ]
     },
     {
       name: 'Bathroom',
       shortLabel: 'Bathroom',
       activities: [
-        { name: 'showering', canDoTogether: false },
-        { name: 'brushing teeth', canDoTogether: false },
-        { name: 'using toilet', canDoTogether: false }
+        { name: 'showering', allowedInteractions: ['solo'] },
+        { name: 'brushing teeth', allowedInteractions: ['solo'] },
+        { name: 'using toilet', allowedInteractions: ['solo'] }
       ]
     },
     {
       name: 'Front Door',
       shortLabel: 'Entrance',
       activities: [
-        { name: 'entering flat', canDoTogether: true },
-        { name: 'exiting flat', canDoTogether: true }
+        { name: 'entering flat', allowedInteractions: ['solo', 'collaborative', 'assistive'] },
+        { name: 'exiting flat', allowedInteractions: ['solo', 'collaborative', 'assistive'] }
       ]
     }
   ]
 };
 
 function toActDraft(item: string | EnvironmentActivityDraft): EnvironmentActivityDraft {
-  return typeof item === 'string'
-    ? { name: item, canDoTogether: true }
-    : { name: item.name, shortLabel: item.shortLabel, canDoTogether: item.canDoTogether !== false };
+  if (typeof item === 'string') {
+    return {
+      name: item,
+      allowedInteractions: [...ALL_INTERACTION_KEYS],
+      canDoTogether: true
+    };
+  }
+  const allowedInteractions = resolveAllowedInteractionKeys(item);
+  return {
+    name: item.name,
+    shortLabel: item.shortLabel,
+    allowedInteractions,
+    canDoTogether: allowedInteractions.some(k => k !== 'solo')
+  };
 }
 
 export function snapshotToDraft(snapshot: ConfigSnapshot, namePrefix = 'Custom Copy'): EnvironmentDraftInput {
@@ -94,11 +107,15 @@ export function snapshotToDraft(snapshot: ConfigSnapshot, namePrefix = 'Custom C
     locations: (snapshot.locations || []).map(loc => ({
       name: loc.name,
       shortLabel: loc.shortLabel || loc.name,
-      activities: (snapshot.locationActivitiesMap?.[loc.id] || []).map(a => ({
-        name: a.name,
-        shortLabel: a.shortLabel || a.name,
-        canDoTogether: a.canDoTogether !== false
-      }))
+      activities: (snapshot.locationActivitiesMap?.[loc.id] || []).map(a => {
+        const allowedInteractions = resolveAllowedInteractionKeys(a);
+        return {
+          name: a.name,
+          shortLabel: a.shortLabel || a.name,
+          allowedInteractions,
+          canDoTogether: allowedInteractions.some(k => k !== 'solo')
+        };
+      })
     }))
   };
 }
@@ -224,21 +241,41 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
         if (idx !== locIdx) return loc;
         const normalized = loc.activities.map(toActDraft);
         if (normalized.some(a => a.name.toLowerCase() === raw.toLowerCase())) return loc;
-        return { ...loc, activities: [...normalized, { name: raw, canDoTogether: true }] };
+        return {
+          ...loc,
+          activities: [
+            ...normalized,
+            { name: raw, allowedInteractions: [...ALL_INTERACTION_KEYS], canDoTogether: true }
+          ]
+        };
       })
     );
     setActivityInputs(prev => ({ ...prev, [locIdx]: '' }));
     setErrorMsg(null);
   };
 
-  const handleToggleActivityMode = (locIdx: number, actIdx: number) => {
+  const handleToggleActivityInteraction = (locIdx: number, actIdx: number, key: InteractionKey) => {
+    setErrorMsg(null);
     setLocations(prev =>
       prev.map((loc, idx) => {
         if (idx !== locIdx) return loc;
         const normalized = loc.activities.map(toActDraft);
-        const updated = normalized.map((act, j) =>
-          j === actIdx ? { ...act, canDoTogether: act.canDoTogether === false } : act
-        );
+        const updated = normalized.map((act, j) => {
+          if (j !== actIdx) return act;
+          const current = resolveAllowedInteractionKeys(act);
+          if (current.includes(key) && current.length === 1) {
+            setErrorMsg(`"${act.name}" must keep at least one interaction mode (Solo, Collab, or Assisted).`);
+            return act;
+          }
+          const next = current.includes(key)
+            ? current.filter(k => k !== key)
+            : ALL_INTERACTION_KEYS.filter(k => k === key || current.includes(k));
+          return {
+            ...act,
+            allowedInteractions: next,
+            canDoTogether: next.some(k => k !== 'solo')
+          };
+        });
         return { ...loc, activities: updated };
       })
     );
@@ -270,7 +307,7 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
       const pendingAct = (activityInputs[idx] || '').trim();
       const acts = loc.activities.map(toActDraft);
       if (pendingAct && !acts.some(a => a.name.toLowerCase() === pendingAct.toLowerCase())) {
-        acts.push({ name: pendingAct, canDoTogether: true });
+        acts.push({ name: pendingAct, allowedInteractions: [...ALL_INTERACTION_KEYS], canDoTogether: true });
       }
       return {
         name: loc.name.trim(),
@@ -500,22 +537,32 @@ export const EnvironmentBuilderModal: React.FC<EnvironmentBuilderModalProps> = (
                   </div>
 
                   <div className="env-acts-wrap">
-                    <span className="env-acts-lbl">Activities ({loc.activities.length}) — click badge to toggle Together vs Solo only:</span>
+                    <span className="env-acts-lbl">Activities ({loc.activities.length}) — toggle allowed modes per activity (Solo / Collab / Assisted):</span>
                     <div className="env-chip-list">
                       {loc.activities.map((rawAct, actIdx) => {
                         const act = toActDraft(rawAct);
-                        const isTogether = act.canDoTogether !== false;
+                        const allowed = resolveAllowedInteractionKeys(act);
                         return (
                           <span key={`${locIdx}-${act.name}-${actIdx}`} className="env-act-chip">
-                            <span>{act.name}</span>
-                            <button
-                              type="button"
-                              className={`chip-mode-toggle ${isTogether ? 'mode-together' : 'mode-solo'}`}
-                              onClick={() => handleToggleActivityMode(locIdx, actIdx)}
-                              title={isTogether ? 'Allows Solo / Collab / Assisted — click to set Solo only' : 'Solo only — click to allow Together / Collab / Assisted'}
-                            >
-                              {isTogether ? 'Together' : 'Solo only'}
-                            </button>
+                            <span className="env-act-name">{act.name}</span>
+                            <span className="chip-inter-group" role="group" aria-label={`Allowed modes for ${act.name}`}>
+                              {ALL_INTERACTION_KEYS.map(key => {
+                                const isOn = allowed.includes(key);
+                                const shortLbl = INTERACTION_KEY_LABELS[key];
+                                return (
+                                  <button
+                                    key={key}
+                                    type="button"
+                                    className={`chip-inter-btn ${isOn ? `is-on mode-${key}` : 'is-off'}`}
+                                    aria-pressed={isOn}
+                                    onClick={() => handleToggleActivityInteraction(locIdx, actIdx, key)}
+                                    title={`${isOn ? 'Enabled' : 'Disabled'}: ${shortLbl} — click to toggle`}
+                                  >
+                                    {shortLbl}
+                                  </button>
+                                );
+                              })}
+                            </span>
                             <button
                               type="button"
                               className="chip-remove-btn"

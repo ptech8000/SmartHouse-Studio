@@ -26,6 +26,7 @@ import { Screen5Review } from './components/Screen5Review';
 import { AdminConsole } from './components/AdminConsole';
 import { AdminLogin, ChangePasswordModal } from './components/AdminLogin';
 import { useNotify } from './components/InAppNotifications';
+import { getAllowedInteractionsForActivity, isActivitySoloOnly } from './utils/interactions';
 import { CheckCircle, Lock, ShieldAlert } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -296,8 +297,10 @@ export const App: React.FC = () => {
 
   const handleActivitySelect = (act: ActivityItem) => {
     setChosenActivity(act);
-    if (act.canDoTogether === false) {
-      const soloInter = config?.interactions.find(i => !i.requiresPerson) || {
+    const configInteractions = config?.interactions || [];
+    const allowedInters = getAllowedInteractionsForActivity(act, configInteractions);
+    if (isActivitySoloOnly(act, configInteractions)) {
+      const soloInter = allowedInters.find(i => !i.requiresPerson) || {
         key: 'solo',
         label: 'Solo',
         shortLabel: 'Solo',
@@ -307,6 +310,10 @@ export const App: React.FC = () => {
       setChosenPerson(null);
       setCurrentStep(5);
       return;
+    }
+    if (chosenInteraction && !allowedInters.some(i => i.key === chosenInteraction.key)) {
+      setChosenInteraction(null);
+      setChosenPerson(null);
     }
     setCurrentStep(3);
   };
@@ -636,7 +643,7 @@ export const App: React.FC = () => {
                 <>
                   {/* Progressive Flow Step Indicator */}
                   {(() => {
-                    const soloOnlyActivity = chosenActivity?.canDoTogether === false;
+                    const soloOnlyActivity = isActivitySoloOnly(chosenActivity, config.interactions);
                     const needsPerson = !soloOnlyActivity && chosenInteraction?.requiresPerson !== false;
                     const displayTotal = soloOnlyActivity ? 3 : (needsPerson ? 5 : 4);
                     const displayStep = soloOnlyActivity && currentStep === 5
@@ -670,6 +677,7 @@ export const App: React.FC = () => {
                     chosenActivity={chosenActivity}
                     chosenInteraction={chosenInteraction}
                     chosenPerson={chosenPerson}
+                    isSoloOnly={isActivitySoloOnly(chosenActivity, config.interactions)}
                     isRunning={Boolean(activityStartedAt)}
                     onEditStep={handleEditStep}
                   />
@@ -694,11 +702,10 @@ export const App: React.FC = () => {
                       />
                     )}
 
-                    {/* Screen 3: Interaction (Solo, Collaborative, Assistive) */}
+                    {/* Screen 3: Interaction (filtered by enabled modes for the chosen activity) */}
                     {currentStep === 3 && (
                       <Screen3Interaction
-                        interactions={config.interactions}
-                        soloOnly={chosenActivity?.canDoTogether === false}
+                        interactions={getAllowedInteractionsForActivity(chosenActivity, config.interactions)}
                         onSelect={handleInteractionSelect}
                         selectedKey={chosenInteraction?.key}
                       />
@@ -721,6 +728,7 @@ export const App: React.FC = () => {
                         activity={chosenActivity}
                         interaction={chosenInteraction}
                         person={chosenPerson}
+                        isSoloOnly={isActivitySoloOnly(chosenActivity, config.interactions)}
                         activityStartedAt={activityStartedAt}
                         onEditStep={handleEditStep}
                         onStartActivity={handleStartActivity}

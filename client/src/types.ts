@@ -6,10 +6,13 @@ export interface LocationItem {
   description?: string;
 }
 
+export type InteractionKey = 'solo' | 'collaborative' | 'assistive';
+
 export interface ActivityItem {
   id: number;
   name: string;
   shortLabel: string;
+  allowedInteractions?: InteractionKey[];
   canDoTogether?: boolean;
 }
 
@@ -51,6 +54,7 @@ export interface SessionItem {
 export interface EnvironmentActivityDraft {
   name: string;
   shortLabel?: string;
+  allowedInteractions?: InteractionKey[];
   canDoTogether?: boolean;
 }
 

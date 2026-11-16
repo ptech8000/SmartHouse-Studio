@@ -9,6 +9,7 @@ interface Screen5ReviewProps {
   activity: ActivityItem;
   interaction: InteractionItem;
   person: string | null;
+  isSoloOnly?: boolean;
   activityStartedAt: string | null;
   onEditStep: (step: number) => void;
   onStartActivity: () => void;
@@ -31,6 +32,7 @@ export const Screen5Review: React.FC<Screen5ReviewProps> = ({
   activity,
   interaction,
   person,
+  isSoloOnly = false,
   activityStartedAt,
   onEditStep,
   onStartActivity,
@@ -113,13 +115,13 @@ export const Screen5Review: React.FC<Screen5ReviewProps> = ({
         </div>
 
         {/* Interaction Row */}
-        {isRunning || activity.canDoTogether === false ? (
+        {isRunning || isSoloOnly ? (
           <div className="review-card review-card-static">
             <div className="review-card-info">
               <span className="review-card-label">INTERACTION</span>
               <span className="review-card-value">
                 {interaction.shortLabel || interaction.label}
-                {activity.canDoTogether === false ? ' (Solo-only activity)' : ''}
+                {isSoloOnly ? ' (Solo-only activity)' : ''}
               </span>
             </div>
           </div>
@@ -178,7 +180,7 @@ export const Screen5Review: React.FC<Screen5ReviewProps> = ({
             <button
               type="button"
               className="btn-secondary"
-              onClick={() => onEditStep(activity.canDoTogether === false ? 2 : (interaction.requiresPerson ? 4 : 3))}
+              onClick={() => onEditStep(isSoloOnly ? 2 : (interaction.requiresPerson ? 4 : 3))}
               disabled={isSubmitting}
             >
               <ArrowLeft size={18} style={{ marginRight: 6 }} />

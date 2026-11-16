@@ -31,6 +31,39 @@ function normalizeKey(str) {
     .replace(/[_\s]+/g, ' ');
 }
 
+const ALL_INTERACTION_KEYS = ['solo', 'collaborative', 'assistive'];
+const INTERACTION_KEY_ALIASES = {
+  solo: 'solo',
+  collab: 'collaborative',
+  collaborative: 'collaborative',
+  assisted: 'assistive',
+  assistive: 'assistive'
+};
+
+function normalizeAllowedInteractions(rawAct, fallbackCanDoTogether = true) {
+  const rawList = Array.isArray(rawAct?.allowedInteractions)
+    ? rawAct.allowedInteractions
+    : Array.isArray(rawAct?.allowed_interactions)
+      ? rawAct.allowed_interactions
+      : null;
+
+  if (rawList) {
+    const picked = new Set();
+    for (const item of rawList) {
+      const alias = INTERACTION_KEY_ALIASES[String(item || '').trim().toLowerCase()];
+      if (alias) picked.add(alias);
+    }
+    const ordered = ALL_INTERACTION_KEYS.filter(k => picked.has(k));
+    if (ordered.length > 0) return ordered;
+  }
+
+  const canTogether =
+    rawAct?.canDoTogether !== false &&
+    rawAct?.can_do_together !== false &&
+    fallbackCanDoTogether !== false;
+  return canTogether ? [...ALL_INTERACTION_KEYS] : ['solo'];
+}
+
 // Known aliases for fuzzy matching
 const ZONE_ALIASES = {
   'landing': 'landing area',
@@ -170,12 +203,14 @@ function loadAndValidateConfig() {
     const id = typeof act.id === 'number' ? act.id : idx;
     const name = act.name || `Activity ${id}`;
     const shortLabel = SHORT_LABELS.activities[name] || name;
-    const canDoTogether = act.canDoTogether !== false && act.can_do_together !== false;
+    const allowedInteractions = normalizeAllowedInteractions(act, true);
+    const canDoTogether = allowedInteractions.some(k => k !== 'solo');
 
     const actObj = {
       id,
       name,
       shortLabel,
+      allowedInteractions,
       canDoTogether
     };
     activityMap.set(id, actObj);
@@ -206,13 +241,28 @@ function loadAndValidateConfig() {
     }
 
     if (targetLocationId !== null && locationMap.has(targetLocationId)) {
-      const entryCanDoTogether = entry.canDoTogether !== false && entry.can_do_together !== false;
-      const act = activityMap.get(actId) || {
-        id: actId,
-        name: entry.name,
-        shortLabel: SHORT_LABELS.activities[entry.name] || entry.name,
-        canDoTogether: entryCanDoTogether
-      };
+      const baseAct = activityMap.get(actId);
+      const hasExplicitEntryRules =
+        Array.isArray(entry.allowedInteractions) ||
+        Array.isArray(entry.allowed_interactions) ||
+        typeof entry.canDoTogether === 'boolean' ||
+        typeof entry.can_do_together === 'boolean';
+      const allowedInteractions = hasExplicitEntryRules
+        ? normalizeAllowedInteractions(entry, true)
+        : (baseAct?.allowedInteractions || normalizeAllowedInteractions(entry, true));
+      const act = baseAct
+        ? {
+            ...baseAct,
+            allowedInteractions,
+            canDoTogether: allowedInteractions.some(k => k !== 'solo')
+          }
+        : {
+            id: actId,
+            name: entry.name,
+            shortLabel: SHORT_LABELS.activities[entry.name] || entry.name,
+            allowedInteractions,
+            canDoTogether: allowedInteractions.some(k => k !== 'solo')
+          };
       activityLocations.push({
         activityId: actId,
         locationId: targetLocationId,
@@ -400,9 +450,10 @@ function buildEnvironmentConfig(input) {
       if (seenActsInLoc.has(normAct)) return;
       seenActsInLoc.add(normAct);
 
-      const actCanDoTogether = typeof rawAct === 'object'
-        ? (rawAct?.canDoTogether !== false && rawAct?.can_do_together !== false)
-        : true;
+      const actAllowedInteractions = typeof rawAct === 'object'
+        ? normalizeAllowedInteractions(rawAct, true)
+        : [...ALL_INTERACTION_KEYS];
+      const actCanDoTogether = actAllowedInteractions.some(k => k !== 'solo');
 
       let actObj = activityByNorm.get(normAct);
       if (!actObj) {
@@ -413,13 +464,26 @@ function buildEnvironmentConfig(input) {
           id: activities.length,
           name: actName,
           shortLabel: (actShortRaw || SHORT_LABELS.activities[actName] || actName).slice(0, 32),
+          allowedInteractions: [...actAllowedInteractions],
           canDoTogether: actCanDoTogether
         };
         activities.push(actObj);
         activityByNorm.set(normAct, actObj);
+      } else {
+        const merged = ALL_INTERACTION_KEYS.filter(
+          k => actObj.allowedInteractions.includes(k) || actAllowedInteractions.includes(k)
+        );
+        actObj.allowedInteractions = merged;
+        actObj.canDoTogether = merged.some(k => k !== 'solo');
       }
 
-      locationActivitiesMap[locId].push(actObj);
+      locationActivitiesMap[locId].push({
+        id: actObj.id,
+        name: actObj.name,
+        shortLabel: actObj.shortLabel,
+        allowedInteractions: [...actAllowedInteractions],
+        canDoTogether: actCanDoTogether
+      });
       activityLocations.push({
         activityId: actObj.id,
         locationId: locId,
@@ -471,12 +535,16 @@ function buildEnvironmentExportPayload(env) {
     name: loc.name,
     shortLabel: loc.shortLabel || loc.name,
     description: loc.description || '',
-    activities: (locActsMap[loc.id] || []).map(act => ({
-      id: act.id,
-      name: act.name,
-      shortLabel: act.shortLabel || act.name,
-      canDoTogether: act.canDoTogether !== false
-    }))
+    activities: (locActsMap[loc.id] || []).map(act => {
+      const allowedInteractions = normalizeAllowedInteractions(act, true);
+      return {
+        id: act.id,
+        name: act.name,
+        shortLabel: act.shortLabel || act.name,
+        allowedInteractions,
+        canDoTogether: allowedInteractions.some(k => k !== 'solo')
+      };
+    })
   }));
 
   return {
@@ -497,11 +565,15 @@ function buildEnvironmentExportPayload(env) {
         name: l.name,
         description: l.description || ''
       })),
-      activities: activities.map(a => ({
-        id: a.id,
-        name: a.name,
-        canDoTogether: a.canDoTogether !== false
-      })),
+      activities: activities.map(a => {
+        const allowedInteractions = normalizeAllowedInteractions(a, true);
+        return {
+          id: a.id,
+          name: a.name,
+          allowedInteractions,
+          canDoTogether: allowedInteractions.some(k => k !== 'solo')
+        };
+      }),
       activities_location: activityLocations.length > 0
         ? activityLocations.map(al => ({
             id: al.activityId,
@@ -546,11 +618,15 @@ function parseEnvironmentImportPayload(rawInput, fallbackName = '') {
         name: loc.name,
         shortLabel: loc.shortLabel || loc.name,
         description: loc.description || '',
-        activities: (snap.locationActivitiesMap?.[loc.id] || []).map(a => ({
-          name: a.name,
-          shortLabel: a.shortLabel || a.name,
-          canDoTogether: a.canDoTogether !== false && a.can_do_together !== false
-        }))
+        activities: (snap.locationActivitiesMap?.[loc.id] || []).map(a => {
+          const allowedInteractions = normalizeAllowedInteractions(a, true);
+          return {
+            name: a.name,
+            shortLabel: a.shortLabel || a.name,
+            allowedInteractions,
+            canDoTogether: allowedInteractions.some(k => k !== 'solo')
+          };
+        })
       }))
     };
   }
@@ -598,9 +674,11 @@ function parseEnvironmentImportPayload(rawInput, fallbackName = '') {
     if (Array.isArray(src.activities)) {
       src.activities.forEach(a => {
         if (a && typeof a.name === 'string') {
+          const allowedInteractions = normalizeAllowedInteractions(a, true);
           actInfo.set(a.id, {
             name: a.name,
-            canDoTogether: a.canDoTogether !== false && a.can_do_together !== false
+            allowedInteractions,
+            canDoTogether: allowedInteractions.some(k => k !== 'solo')
           });
         }
       });
@@ -612,13 +690,20 @@ function parseEnvironmentImportPayload(rawInput, fallbackName = '') {
         : normMap.get(ZONE_ALIASES[normalizeKey(entry.zone)] || normalizeKey(entry.zone));
       const meta = actInfo.get(entry.id);
       const actName = entry.name || meta?.name;
-      const canDoTogether = (entry.canDoTogether !== false && entry.can_do_together !== false) &&
-        (meta ? meta.canDoTogether : true);
+      const hasEntryOverride =
+        Array.isArray(entry.allowedInteractions) ||
+        Array.isArray(entry.allowed_interactions) ||
+        typeof entry.canDoTogether === 'boolean' ||
+        typeof entry.can_do_together === 'boolean';
+      const allowedInteractions = hasEntryOverride
+        ? normalizeAllowedInteractions(entry, true)
+        : (meta ? meta.allowedInteractions : normalizeAllowedInteractions(entry, true));
       if (target && actName && !target.activities.some(a => a.name === actName)) {
         target.activities.push({
           name: actName,
           shortLabel: SHORT_LABELS.activities[actName] || actName,
-          canDoTogether
+          allowedInteractions,
+          canDoTogether: allowedInteractions.some(k => k !== 'solo')
         });
       }
     });

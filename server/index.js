@@ -620,7 +620,11 @@ app.post('/api/test/generate-annotation', requireAdmin, apiWriteLimiter, (req, r
     const loc = snap.locations.find(l => l.id === (location_id ?? 2)) || snap.locations[0];
     const validActs = snap.locationActivitiesMap[loc.id] || snap.activities;
     const act = validActs.find(a => a.id === (activity_id ?? validActs[0]?.id)) || validActs[0];
-    const resolvedInteraction = act?.canDoTogether === false ? 'solo' : (interaction || 'solo');
+    const allowedInterKeys = Array.isArray(act?.allowedInteractions) && act.allowedInteractions.length > 0
+      ? act.allowedInteractions
+      : (act?.canDoTogether === false ? ['solo'] : ['solo', 'collaborative', 'assistive']);
+    const requestedInter = interaction || 'solo';
+    const resolvedInteraction = allowedInterKeys.includes(requestedInter) ? requestedInter : allowedInterKeys[0];
 
     const now = new Date();
     const started = new Date(now.getTime() - 8000).toISOString();

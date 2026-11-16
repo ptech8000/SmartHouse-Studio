@@ -324,7 +324,7 @@ async function runTests() {
   }, cfg.snapshot);
   assert.strictEqual(allowSoloOnToilet.valid, true, 'Solo must be accepted on solo-only activities');
 
-  // Preserve canDoTogether in custom env + JSON export/import
+  // Preserve granular allowedInteractions (solo / collaborative / assistive) in custom env + JSON export/import
   const customRuleBuilt = buildEnvironmentConfig({
     name: 'Clinic Suite',
     roles: ['Resident_A', 'Nurse_1'],
@@ -332,13 +332,43 @@ async function runTests() {
       {
         name: 'Bathroom',
         activities: [
-          { name: 'bathing', canDoTogether: false },
-          { name: 'assisted wash', canDoTogether: true }
+          { name: 'bathing', allowedInteractions: ['solo'] },
+          { name: 'assisted wash', allowedInteractions: ['solo', 'assistive'] },
+          { name: 'group cleanup', allowedInteractions: ['solo', 'collaborative'] }
         ]
       }
     ]
   });
   assert.strictEqual(customRuleBuilt.valid, true);
+  const washAct = customRuleBuilt.snapshot.locationActivitiesMap[0].find(a => a.name === 'assisted wash');
+  assert.deepStrictEqual(washAct.allowedInteractions, ['solo', 'assistive']);
+
+  const rejectDisabledCollab = validateAnnotationPayload({
+    client_uuid: 'assist-only-' + Date.now(),
+    session_id: 'S_RULE_TEST',
+    participant: 'Resident_A',
+    timestamp_started: new Date(Date.now() - 2000).toISOString(),
+    timestamp_submitted: new Date().toISOString(),
+    location_id: 0,
+    activity_id: washAct.id,
+    interaction: 'collaborative',
+    other_person: 'Nurse_1'
+  }, customRuleBuilt.snapshot);
+  assert.strictEqual(rejectDisabledCollab.valid, false, 'Disabled collaborative option must be rejected');
+
+  const acceptEnabledAssist = validateAnnotationPayload({
+    client_uuid: 'assist-ok-' + Date.now(),
+    session_id: 'S_RULE_TEST',
+    participant: 'Resident_A',
+    timestamp_started: new Date(Date.now() - 2000).toISOString(),
+    timestamp_submitted: new Date().toISOString(),
+    location_id: 0,
+    activity_id: washAct.id,
+    interaction: 'assistive',
+    other_person: 'Nurse_1'
+  }, customRuleBuilt.snapshot);
+  assert.strictEqual(acceptEnabledAssist.valid, true, 'Enabled assistive option must be accepted');
+
   const exportedRuleJson = buildEnvironmentExportPayload({
     id: 'env_rule',
     name: customRuleBuilt.name,
@@ -349,9 +379,11 @@ async function runTests() {
   const importedRuleDraft = parseEnvironmentImportPayload(exportedRuleJson, 'Clinic Suite');
   const rebuiltRuleEnv = buildEnvironmentConfig(importedRuleDraft);
   assert.strictEqual(rebuiltRuleEnv.valid, true);
+  assert.deepStrictEqual(rebuiltRuleEnv.snapshot.activities.find(a => a.name === 'bathing')?.allowedInteractions, ['solo']);
   assert.strictEqual(rebuiltRuleEnv.snapshot.activities.find(a => a.name === 'bathing')?.canDoTogether, false);
-  assert.strictEqual(rebuiltRuleEnv.snapshot.activities.find(a => a.name === 'assisted wash')?.canDoTogether, true);
-  console.log('✓ Solo-only activity rules & JSON round-trip passed all checks');
+  assert.deepStrictEqual(rebuiltRuleEnv.snapshot.activities.find(a => a.name === 'assisted wash')?.allowedInteractions, ['solo', 'assistive']);
+  assert.deepStrictEqual(rebuiltRuleEnv.snapshot.activities.find(a => a.name === 'group cleanup')?.allowedInteractions, ['solo', 'collaborative']);
+  console.log('✓ Solo/Collab/Assisted activity rules & JSON round-trip passed all checks');
 
   console.log('\n🎉 ALL 9 TEST SUITES PASSED CLEANLY!\n');
 }

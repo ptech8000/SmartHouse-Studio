@@ -1,5 +1,6 @@
 import React from 'react';
 import type { ActivityItem, LocationItem } from '../types';
+import { getActivityInteractionBadge } from '../utils/interactions';
 
 interface Screen2ActivityProps {
   location: LocationItem;
@@ -25,6 +26,7 @@ export const Screen2Activity: React.FC<Screen2ActivityProps> = ({
         <div className="tiles-grid two-column">
           {activities.map(act => {
             const isSelected = selectedId === act.id;
+            const modeBadge = getActivityInteractionBadge(act);
             return (
               <button
                 key={act.id}
@@ -32,8 +34,8 @@ export const Screen2Activity: React.FC<Screen2ActivityProps> = ({
                 onClick={() => onSelect(act)}
               >
                 <span className="tile-primary-text">{act.shortLabel || act.name}</span>
-                {act.canDoTogether === false ? (
-                  <span className="tile-sub-text">Solo only</span>
+                {modeBadge ? (
+                  <span className="tile-sub-text">{modeBadge}</span>
                 ) : (
                   act.shortLabel && act.shortLabel !== act.name && (
                     <span className="tile-sub-text">{act.name}</span>

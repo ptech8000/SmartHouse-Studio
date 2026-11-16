@@ -8,6 +8,7 @@ interface BreadcrumbStackProps {
   chosenActivity: ActivityItem | null;
   chosenInteraction: InteractionItem | null;
   chosenPerson: string | null;
+  isSoloOnly?: boolean;
   isRunning?: boolean;
   onEditStep: (targetStep: number) => void;
 }
@@ -18,6 +19,7 @@ export const BreadcrumbStack: React.FC<BreadcrumbStackProps> = ({
   chosenActivity,
   chosenInteraction,
   chosenPerson,
+  isSoloOnly = false,
   isRunning = false,
   onEditStep
 }) => {
@@ -65,13 +67,13 @@ export const BreadcrumbStack: React.FC<BreadcrumbStackProps> = ({
         )
       )}
 
-      {/* Interaction Banner (Screen >= 4, editable only when activity allows collaboration and not running) */}
+      {/* Interaction Banner (Screen >= 4, editable only when not solo-only and not running) */}
       {currentStep >= 4 && chosenInteraction && (
-        isRunning || chosenActivity?.canDoTogether === false ? (
+        isRunning || isSoloOnly ? (
           <div className="banner-row banner-interaction banner-static">
             <span className="banner-title">
               {chosenInteraction.shortLabel || chosenInteraction.label}
-              {chosenActivity?.canDoTogether === false ? ' (Solo only)' : ''}
+              {isSoloOnly ? ' (Solo only)' : ''}
             </span>
           </div>
         ) : (
