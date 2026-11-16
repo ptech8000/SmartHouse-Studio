@@ -14,37 +14,16 @@ function escapeCsvField(val) {
   return str;
 }
 
-function formatEventDateTime(isoString, timeZone = 'Europe/Paris') {
+function formatEventDateTime(isoString) {
   if (!isoString) return { date: '', time: '' };
   const d = new Date(isoString);
   if (Number.isNaN(d.getTime())) return { date: '', time: '' };
 
-  try {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }).formatToParts(d);
-
-    const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
-    const hour = map.hour === '24' ? '00' : map.hour;
-    return {
-      date: `${map.year}-${map.month}-${map.day}`,
-      time: `${hour}:${map.minute}:${map.second}`
-    };
-  } catch {
-    // Fallback to UTC parts if timezone string is invalid
-    const iso = d.toISOString();
-    return {
-      date: iso.slice(0, 10),
-      time: iso.slice(11, 19)
-    };
-  }
+  const iso = d.toISOString(); // YYYY-MM-DDTHH:mm:ss.sssZ
+  return {
+    date: iso.slice(0, 10),
+    time: iso.slice(11) // HH:mm:ss.sssZ
+  };
 }
 
 function computeDurationSec(startedIso, submittedIso) {
