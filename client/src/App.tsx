@@ -153,6 +153,13 @@ export const App: React.FC = () => {
           setParticipant(cfgRes.snapshot.roles[0]);
         }
       }
+
+      // Immediately attempt to sync or prune stale unrecoverable outbox items after auth
+      flushOutbox()
+        .then(res => {
+          if (res.synced > 0) refreshLiveState();
+        })
+        .catch(() => {});
     } catch (err: any) {
       setAuthChecked(true);
       if (err?.status === 401 || err?.status === 403) {
@@ -425,10 +432,10 @@ export const App: React.FC = () => {
         await postAnnotation(payload);
         await removeAnnotationFromOutbox(clientUuid);
       } catch (postErr: any) {
-        if (postErr.status === 409) {
+        if (postErr.status === 400 || postErr.status === 403 || postErr.status === 404 || postErr.status === 409) {
           await removeAnnotationFromOutbox(clientUuid);
           await refreshLiveState();
-          notify(postErr.message, 'warning', 'Session Stopped');
+          notify(postErr.message, 'warning', postErr.status === 409 ? 'Session Stopped' : 'Not Saved');
           setIsSubmitting(false);
           return;
         }
@@ -532,6 +539,7 @@ export const App: React.FC = () => {
         adminUsername={adminAuth?.username || null}
         onOpenPasswordModal={() => setShowPasswordModal(true)}
         onLogout={handleLogout}
+        onOutboxSynced={() => refreshLiveState()}
       />
 
       {showPasswordModal && (

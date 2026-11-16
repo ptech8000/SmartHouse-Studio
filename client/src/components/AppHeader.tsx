@@ -1,6 +1,13 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSynchronizedClock } from '../services/clock';
 import type { BleStreamState } from '../services/ble';
+import {
+  clearOutbox,
+  flushOutbox,
+  getPendingAnnotations,
+  removeAnnotationFromOutbox
+} from '../services/outbox';
+import type { OutboxEntry } from '../services/outbox';
 import {
   Clock,
   Wifi,
@@ -16,7 +23,9 @@ import {
   ShieldCheck,
   Download,
   KeyRound,
-  LogOut
+  LogOut,
+  Trash2,
+  X
 } from 'lucide-react';
 
 export type MainTabType = 'participant' | 'sessions' | 'wearables' | 'data' | 'config';
@@ -36,6 +45,7 @@ interface AppHeaderProps {
   adminUsername?: string | null;
   onOpenPasswordModal?: () => void;
   onLogout?: () => void;
+  onOutboxSynced?: () => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -52,9 +62,51 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   onInstallApp,
   adminUsername,
   onOpenPasswordModal,
-  onLogout
+  onLogout,
+  onOutboxSynced
 }) => {
   const { timeStr } = useSynchronizedClock();
+  const [showPendingModal, setShowPendingModal] = useState(false);
+  const [pendingEntries, setPendingEntries] = useState<OutboxEntry[]>([]);
+  const [isFlushing, setIsFlushing] = useState(false);
+
+  const loadPendingEntries = async () => {
+    const items = await getPendingAnnotations();
+    setPendingEntries(items);
+    if (items.length === 0) {
+      setShowPendingModal(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showPendingModal) {
+      loadPendingEntries();
+    }
+  }, [showPendingModal, pendingCount]);
+
+  const handleRetryFlush = async () => {
+    setIsFlushing(true);
+    try {
+      const result = await flushOutbox();
+      await loadPendingEntries();
+      if ((result.synced > 0 || result.dropped > 0) && onOutboxSynced) {
+        onOutboxSynced();
+      }
+    } finally {
+      setIsFlushing(false);
+    }
+  };
+
+  const handleDeleteEntry = async (uuid: string) => {
+    await removeAnnotationFromOutbox(uuid);
+    await loadPendingEntries();
+  };
+
+  const handleClearAll = async () => {
+    await clearOutbox();
+    setPendingEntries([]);
+    setShowPendingModal(false);
+  };
 
   return (
     <header className="app-header-pro">
@@ -197,32 +249,42 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           )}
 
           {/* Network & Outbox Sync Pill */}
-          <div
-            className={`context-pill outbox-pill ${
-              !isOnline
-                ? 'outbox-pill-offline'
-                : pendingCount > 0
-                ? 'outbox-pill-pending'
-                : 'outbox-pill-synced'
-            }`}
-          >
-            {!isOnline ? (
-              <>
-                <WifiOff size={12} className="pill-icon" />
-                <span>Offline{pendingCount > 0 ? ` (${pendingCount})` : ''}</span>
-              </>
-            ) : pendingCount > 0 ? (
-              <>
-                <RefreshCw size={12} className="spin-icon pill-icon" />
-                <span>Pending: {pendingCount}</span>
-              </>
-            ) : (
-              <>
-                <Wifi size={12} className="pill-icon" />
-                <span>Synced</span>
-              </>
-            )}
-          </div>
+          {pendingCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowPendingModal(true)}
+              className={`context-pill outbox-pill outbox-pill-btn ${
+                !isOnline ? 'outbox-pill-offline' : 'outbox-pill-pending'
+              }`}
+              title="Click to inspect, retry, or clear queued offline annotations"
+            >
+              {!isOnline ? (
+                <>
+                  <WifiOff size={12} className="pill-icon" />
+                  <span>Offline ({pendingCount})</span>
+                </>
+              ) : (
+                <>
+                  <RefreshCw size={12} className="spin-icon pill-icon" />
+                  <span>Pending: {pendingCount}</span>
+                </>
+              )}
+            </button>
+          ) : (
+            <div className={`context-pill outbox-pill ${!isOnline ? 'outbox-pill-offline' : 'outbox-pill-synced'}`}>
+              {!isOnline ? (
+                <>
+                  <WifiOff size={12} className="pill-icon" />
+                  <span>Offline</span>
+                </>
+              ) : (
+                <>
+                  <Wifi size={12} className="pill-icon" />
+                  <span>Synced</span>
+                </>
+              )}
+            </div>
+          )}
 
           {/* Admin Auth Actions (Change Password & Sign Out) */}
           {!isParticipantClient && adminUsername && (
@@ -253,6 +315,99 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
           )}
         </div>
       </div>
+
+      {showPendingModal && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="outbox-modal-title">
+          <div className="modal-card outbox-modal-card">
+            <div className="modal-card-head">
+              <div className="modal-title-group">
+                <RefreshCw size={18} />
+                <div>
+                  <h3 id="outbox-modal-title">Pending Sync Queue ({pendingEntries.length})</h3>
+                  <p className="modal-subtitle">
+                    Local browser outbox entries waiting to upload to the server
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn-close-modal"
+                onClick={() => setShowPendingModal(false)}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="outbox-modal-body">
+              {pendingEntries.length === 0 ? (
+                <div className="empty-state-box">No pending items remain in local storage.</div>
+              ) : (
+                <div className="outbox-entries-list">
+                  {pendingEntries.map(entry => (
+                    <div key={entry.client_uuid} className="outbox-entry-row">
+                      <div className="outbox-entry-main">
+                        <div className="outbox-entry-title">
+                          <strong>{entry.participant}</strong> • Session <code>{entry.session_id}</code>
+                        </div>
+                        <div className="outbox-entry-meta">
+                          {entry.location} → {entry.activity} ({entry.interaction}
+                          {entry.other_person ? ` with ${entry.other_person}` : ''})
+                        </div>
+                        <div className="outbox-entry-time">
+                          Started: {entry.timestamp_started?.slice(11, 23)} · Stopped: {entry.timestamp_submitted?.slice(11, 23)}
+                        </div>
+                        {entry.lastError && (
+                          <div className="outbox-entry-err">
+                            Last sync error{entry.lastStatus ? ` (HTTP ${entry.lastStatus})` : ''}: {entry.lastError}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-table btn-table-delete"
+                        onClick={() => handleDeleteEntry(entry.client_uuid)}
+                        title="Discard this queued entry"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="modal-actions-row">
+                <button
+                  type="button"
+                  className="btn-ui btn-ui-danger"
+                  onClick={handleClearAll}
+                  disabled={pendingEntries.length === 0 || isFlushing}
+                >
+                  <Trash2 size={14} /> Clear All
+                </button>
+                <div className="modal-actions-btns">
+                  <button
+                    type="button"
+                    className="btn-ui btn-ui-secondary"
+                    onClick={() => setShowPendingModal(false)}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ui btn-ui-primary"
+                    onClick={handleRetryFlush}
+                    disabled={pendingEntries.length === 0 || isFlushing}
+                  >
+                    <RefreshCw size={14} />
+                    <span>{isFlushing ? 'Syncing...' : 'Retry Sync Now'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 };
