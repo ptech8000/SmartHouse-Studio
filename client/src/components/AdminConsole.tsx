@@ -939,7 +939,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                       <th>Participant</th>
                       <th>Date</th>
                       <th>Started</th>
-                      <th>Submitted</th>
+                      <th>Stopped</th>
+                      <th>Duration</th>
                       <th>Location</th>
                       <th>Activity</th>
                       <th>Interaction</th>
@@ -948,20 +949,28 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                     </tr>
                   </thead>
                   <tbody>
-                    {[...filteredAnnotations].reverse().map((a, i) => (
+                    {[...filteredAnnotations].reverse().map((a, i) => {
+                      const startMs = a.timestamp_started ? Date.parse(a.timestamp_started) : NaN;
+                      const stopMs = a.timestamp_submitted ? Date.parse(a.timestamp_submitted) : NaN;
+                      const durSec = !Number.isNaN(startMs) && !Number.isNaN(stopMs)
+                        ? `${Math.max(0, (stopMs - startMs) / 1000).toFixed(1)}s`
+                        : '—';
+                      return (
                       <tr key={a.client_uuid || i}>
                         <td><strong>{a.seq || filteredAnnotations.length - i}</strong></td>
                         <td><span className="badge-participant">{a.participant}</span></td>
                         <td><span className="mono-time">{a.timestamp_submitted ? new Date(a.timestamp_submitted).toLocaleDateString() : '—'}</span></td>
                         <td><span className="mono-time">{a.timestamp_started ? new Date(a.timestamp_started).toLocaleTimeString() : '—'}</span></td>
                         <td><span className="mono-time">{a.timestamp_submitted ? new Date(a.timestamp_submitted).toLocaleTimeString() : '—'}</span></td>
+                        <td><span className="mono-time">{durSec}</span></td>
                         <td>{a.location}</td>
                         <td><strong>{a.activity}</strong></td>
                         <td><span className="badge-interaction">{a.interaction}</span></td>
                         <td>{a.other_person ? <span className="badge-other-person">{a.other_person}</span> : '—'}</td>
                         <td>{a.edited ? 'Yes' : 'No'}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

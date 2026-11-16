@@ -8,6 +8,7 @@ interface BreadcrumbStackProps {
   chosenActivity: ActivityItem | null;
   chosenInteraction: InteractionItem | null;
   chosenPerson: string | null;
+  isRunning?: boolean;
   onEditStep: (targetStep: number) => void;
 }
 
@@ -17,6 +18,7 @@ export const BreadcrumbStack: React.FC<BreadcrumbStackProps> = ({
   chosenActivity,
   chosenInteraction,
   chosenPerson,
+  isRunning = false,
   onEditStep
 }) => {
   if (currentStep === 1) return null;
@@ -25,37 +27,52 @@ export const BreadcrumbStack: React.FC<BreadcrumbStackProps> = ({
     <div className="breadcrumb-stack">
       {/* Location Banner (Screen >= 2) */}
       {chosenLocation && (
-        <button
-          className="banner-row banner-location"
-          onClick={() => onEditStep(1)}
-          title="Click to change location"
-        >
-          <span className="banner-title">{chosenLocation.shortLabel || chosenLocation.name}</span>
-          <span className="banner-edit-hint">
-            <Edit2 size={13} />
-          </span>
-        </button>
+        isRunning ? (
+          <div className="banner-row banner-location banner-static">
+            <span className="banner-title">{chosenLocation.shortLabel || chosenLocation.name}</span>
+          </div>
+        ) : (
+          <button
+            className="banner-row banner-location"
+            onClick={() => onEditStep(1)}
+            title="Click to change location"
+          >
+            <span className="banner-title">{chosenLocation.shortLabel || chosenLocation.name}</span>
+            <span className="banner-edit-hint">
+              <Edit2 size={13} />
+            </span>
+          </button>
+        )
       )}
 
       {/* Activity Banner (Screen >= 3) */}
       {currentStep >= 3 && chosenActivity && (
-        <button
-          className="banner-row banner-activity"
-          onClick={() => onEditStep(2)}
-          title="Click to change activity"
-        >
-          <span className="banner-title">{chosenActivity.shortLabel || chosenActivity.name}</span>
-          <span className="banner-edit-hint">
-            <Edit2 size={13} />
-          </span>
-        </button>
+        isRunning ? (
+          <div className="banner-row banner-activity banner-static">
+            <span className="banner-title">{chosenActivity.shortLabel || chosenActivity.name}</span>
+          </div>
+        ) : (
+          <button
+            className="banner-row banner-activity"
+            onClick={() => onEditStep(2)}
+            title="Click to change activity"
+          >
+            <span className="banner-title">{chosenActivity.shortLabel || chosenActivity.name}</span>
+            <span className="banner-edit-hint">
+              <Edit2 size={13} />
+            </span>
+          </button>
+        )
       )}
 
-      {/* Interaction Banner (Screen >= 4, editable only when activity allows collaboration) */}
+      {/* Interaction Banner (Screen >= 4, editable only when activity allows collaboration and not running) */}
       {currentStep >= 4 && chosenInteraction && (
-        chosenActivity?.canDoTogether === false ? (
+        isRunning || chosenActivity?.canDoTogether === false ? (
           <div className="banner-row banner-interaction banner-static">
-            <span className="banner-title">{chosenInteraction.shortLabel || chosenInteraction.label} (Solo only)</span>
+            <span className="banner-title">
+              {chosenInteraction.shortLabel || chosenInteraction.label}
+              {chosenActivity?.canDoTogether === false ? ' (Solo only)' : ''}
+            </span>
           </div>
         ) : (
           <button
@@ -73,16 +90,22 @@ export const BreadcrumbStack: React.FC<BreadcrumbStackProps> = ({
 
       {/* Person Banner (Screen 5 review) */}
       {currentStep === 5 && chosenPerson && (
-        <button
-          className="banner-row banner-person"
-          onClick={() => onEditStep(4)}
-          title="Click to change person"
-        >
-          <span className="banner-title">With: {chosenPerson}</span>
-          <span className="banner-edit-hint">
-            <Edit2 size={13} />
-          </span>
-        </button>
+        isRunning ? (
+          <div className="banner-row banner-person banner-static">
+            <span className="banner-title">With: {chosenPerson}</span>
+          </div>
+        ) : (
+          <button
+            className="banner-row banner-person"
+            onClick={() => onEditStep(4)}
+            title="Click to change person"
+          >
+            <span className="banner-title">With: {chosenPerson}</span>
+            <span className="banner-edit-hint">
+              <Edit2 size={13} />
+            </span>
+          </button>
+        )
       )}
     </div>
   );

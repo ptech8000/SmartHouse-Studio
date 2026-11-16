@@ -1,17 +1,29 @@
 import React, { useState } from 'react';
 import type { LocationItem, ActivityItem, InteractionItem } from '../types';
-import { Check, Edit2, ArrowLeft, Watch } from 'lucide-react';
+import { Play, Square, Edit2, ArrowLeft, Watch, RotateCcw } from 'lucide-react';
 import { triggerWristTapSpike } from '../services/ble';
+import { formatTimeWithSeconds, useSynchronizedClock } from '../services/clock';
 
 interface Screen5ReviewProps {
   location: LocationItem;
   activity: ActivityItem;
   interaction: InteractionItem;
   person: string | null;
+  activityStartedAt: string | null;
   onEditStep: (step: number) => void;
-  onSubmit: () => Promise<void>;
+  onStartActivity: () => void;
+  onStopAndSubmit: () => Promise<void>;
+  onCancelActivity: () => void;
   isSubmitting: boolean;
   bleActive: boolean;
+}
+
+function formatElapsedHms(elapsedMs: number): string {
+  const totalSec = Math.max(0, Math.floor(elapsedMs / 1000));
+  const hrs = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 export const Screen5Review: React.FC<Screen5ReviewProps> = ({
@@ -19,12 +31,20 @@ export const Screen5Review: React.FC<Screen5ReviewProps> = ({
   activity,
   interaction,
   person,
+  activityStartedAt,
   onEditStep,
-  onSubmit,
+  onStartActivity,
+  onStopAndSubmit,
+  onCancelActivity,
   isSubmitting,
   bleActive
 }) => {
   const [tapSuccess, setTapSuccess] = useState(false);
+  const { timestamp } = useSynchronizedClock();
+
+  const isRunning = Boolean(activityStartedAt);
+  const startedMs = activityStartedAt ? Date.parse(activityStartedAt) : null;
+  const elapsedMs = startedMs && !Number.isNaN(startedMs) ? Math.max(0, timestamp - startedMs) : 0;
 
   const handleWristTap = () => {
     triggerWristTapSpike();
@@ -34,39 +54,73 @@ export const Screen5Review: React.FC<Screen5ReviewProps> = ({
 
   return (
     <div className="screen-container review-screen">
-      <div className="section-instruction">Review & Confirm</div>
+      <div className="section-instruction">
+        {isRunning ? 'Activity In Progress' : 'Ready to Start Activity'}
+      </div>
+
+      {/* Live Timer Banner when activity is started */}
+      {isRunning && startedMs && (
+        <div className="activity-timer-card" role="status" aria-live="polite">
+          <div className="timer-card-top">
+            <span className="timer-live-pill">
+              <span className="timer-pulse-dot" />
+              RUNNING
+            </span>
+            <span className="timer-started-meta">
+              Started at <strong>{formatTimeWithSeconds(startedMs)}</strong>
+            </span>
+          </div>
+          <div className="timer-elapsed-digits">{formatElapsedHms(elapsedMs)}</div>
+          <p className="timer-help-text">
+            Perform this activity, then tap <strong>Stop &amp; Save</strong> when finished.
+          </p>
+        </div>
+      )}
 
       <div className="review-cards-list">
         {/* Location Row */}
-        <div className="review-card" onClick={() => onEditStep(1)}>
+        <div
+          className={`review-card ${isRunning ? 'review-card-static' : ''}`}
+          onClick={() => !isRunning && onEditStep(1)}
+        >
           <div className="review-card-info">
             <span className="review-card-label">LOCATION</span>
             <span className="review-card-value">{location.shortLabel || location.name}</span>
           </div>
-          <button className="review-edit-btn" aria-label="Edit location">
-            <Edit2 size={16} />
-            <span>Edit</span>
-          </button>
+          {!isRunning && (
+            <button type="button" className="review-edit-btn" aria-label="Edit location">
+              <Edit2 size={16} />
+              <span>Edit</span>
+            </button>
+          )}
         </div>
 
         {/* Activity Row */}
-        <div className="review-card" onClick={() => onEditStep(2)}>
+        <div
+          className={`review-card ${isRunning ? 'review-card-static' : ''}`}
+          onClick={() => !isRunning && onEditStep(2)}
+        >
           <div className="review-card-info">
             <span className="review-card-label">ACTIVITY</span>
             <span className="review-card-value">{activity.shortLabel || activity.name}</span>
           </div>
-          <button className="review-edit-btn" aria-label="Edit activity">
-            <Edit2 size={16} />
-            <span>Edit</span>
-          </button>
+          {!isRunning && (
+            <button type="button" className="review-edit-btn" aria-label="Edit activity">
+              <Edit2 size={16} />
+              <span>Edit</span>
+            </button>
+          )}
         </div>
 
         {/* Interaction Row */}
-        {activity.canDoTogether === false ? (
+        {isRunning || activity.canDoTogether === false ? (
           <div className="review-card review-card-static">
             <div className="review-card-info">
               <span className="review-card-label">INTERACTION</span>
-              <span className="review-card-value">{interaction.shortLabel || interaction.label} (Solo-only activity)</span>
+              <span className="review-card-value">
+                {interaction.shortLabel || interaction.label}
+                {activity.canDoTogether === false ? ' (Solo-only activity)' : ''}
+              </span>
             </div>
           </div>
         ) : (
@@ -75,7 +129,7 @@ export const Screen5Review: React.FC<Screen5ReviewProps> = ({
               <span className="review-card-label">INTERACTION</span>
               <span className="review-card-value">{interaction.shortLabel || interaction.label}</span>
             </div>
-            <button className="review-edit-btn" aria-label="Edit interaction">
+            <button type="button" className="review-edit-btn" aria-label="Edit interaction">
               <Edit2 size={16} />
               <span>Edit</span>
             </button>
@@ -84,15 +138,20 @@ export const Screen5Review: React.FC<Screen5ReviewProps> = ({
 
         {/* Person Row (if not solo) */}
         {interaction.requiresPerson && (
-          <div className="review-card" onClick={() => onEditStep(4)}>
+          <div
+            className={`review-card ${isRunning ? 'review-card-static' : ''}`}
+            onClick={() => !isRunning && onEditStep(4)}
+          >
             <div className="review-card-info">
               <span className="review-card-label">COLLABORATOR</span>
               <span className="review-card-value">{person || 'Not selected'}</span>
             </div>
-            <button className="review-edit-btn" aria-label="Edit person">
-              <Edit2 size={16} />
-              <span>Edit</span>
-            </button>
+            {!isRunning && (
+              <button type="button" className="review-edit-btn" aria-label="Edit person">
+                <Edit2 size={16} />
+                <span>Edit</span>
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -112,31 +171,60 @@ export const Screen5Review: React.FC<Screen5ReviewProps> = ({
         </div>
       )}
 
-      {/* Action Buttons */}
+      {/* Action Buttons: Start Activity -> Stop & Save Activity */}
       <div className="review-actions">
-        <button
-          className="btn-secondary"
-          onClick={() => onEditStep(activity.canDoTogether === false ? 2 : (interaction.requiresPerson ? 4 : 3))}
-          disabled={isSubmitting}
-        >
-          <ArrowLeft size={18} style={{ marginRight: 6 }} />
-          Back
-        </button>
+        {!isRunning ? (
+          <>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => onEditStep(activity.canDoTogether === false ? 2 : (interaction.requiresPerson ? 4 : 3))}
+              disabled={isSubmitting}
+            >
+              <ArrowLeft size={18} style={{ marginRight: 6 }} />
+              Back
+            </button>
 
-        <button
-          className="btn-submit"
-          onClick={onSubmit}
-          disabled={isSubmitting}
-        >
-          {isSubmitting ? (
-            <span>Saving...</span>
-          ) : (
-            <>
-              <Check size={22} style={{ marginRight: 8 }} />
-              <span>Accept & Submit</span>
-            </>
-          )}
-        </button>
+            <button
+              type="button"
+              className="btn-submit btn-start-activity"
+              onClick={onStartActivity}
+              disabled={isSubmitting}
+            >
+              <Play size={22} style={{ marginRight: 8 }} />
+              <span>Start Activity</span>
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="btn-secondary btn-discard-activity"
+              onClick={onCancelActivity}
+              disabled={isSubmitting}
+              title="Cancel without logging"
+            >
+              <RotateCcw size={17} style={{ marginRight: 6 }} />
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              className="btn-submit btn-stop-activity"
+              onClick={onStopAndSubmit}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <span>Saving...</span>
+              ) : (
+                <>
+                  <Square size={20} style={{ marginRight: 8 }} />
+                  <span>Stop &amp; Save</span>
+                </>
+              )}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

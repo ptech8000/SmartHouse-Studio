@@ -81,7 +81,7 @@ export const App: React.FC = () => {
   const [chosenActivity, setChosenActivity] = useState<ActivityItem | null>(null);
   const [chosenInteraction, setChosenInteraction] = useState<InteractionItem | null>(null);
   const [chosenPerson, setChosenPerson] = useState<string | null>(null);
-  const [stepStartedAt, setStepStartedAt] = useState<string>(getSynchronizedIso());
+  const [activityStartedAt, setActivityStartedAt] = useState<string | null>(null);
   const [hasEdited, setHasEdited] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
@@ -249,6 +249,37 @@ export const App: React.FC = () => {
     return () => clearInterval(poller);
   }, [refreshLiveState]);
 
+  const timerStorageKey = currentSession?.id
+    ? `smarthouse_active_timer:${currentSession.id}:${participant}`
+    : null;
+
+  // Restore any running activity timer if the participant page refreshes or sleeps
+  useEffect(() => {
+    if (!isParticipantClient || !timerStorageKey || !config) return;
+    try {
+      const raw = localStorage.getItem(timerStorageKey);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      const loc = config.locations.find(l => l.id === saved.locationId);
+      const validActs = loc ? (config.locationActivitiesMap[loc.id] || []) : [];
+      const act = validActs.find(a => a.id === saved.activityId);
+      const inter = config.interactions.find(i => i.key === saved.interactionKey);
+      if (!loc || !act || !inter || typeof saved.startedAt !== 'string') {
+        localStorage.removeItem(timerStorageKey);
+        return;
+      }
+      setChosenLocation(loc);
+      setChosenActivity(act);
+      setChosenInteraction(inter);
+      setChosenPerson(typeof saved.person === 'string' && saved.person ? saved.person : null);
+      setHasEdited(Boolean(saved.edited));
+      setActivityStartedAt(saved.startedAt);
+      setCurrentStep(5);
+    } catch {
+      // Ignore malformed stored timer state
+    }
+  }, [isParticipantClient, timerStorageKey, config]);
+
   // 2. Step Selection Handlers
   const handleLocationSelect = (loc: LocationItem) => {
     setChosenLocation(loc);
@@ -296,13 +327,58 @@ export const App: React.FC = () => {
   };
 
   const handleEditStep = (targetStep: number) => {
+    if (activityStartedAt) return;
     setHasEdited(true);
     setCurrentStep(targetStep);
   };
 
-  // 3. Final Submission Handler
+  const handleStartActivity = () => {
+    if (!chosenLocation || !chosenActivity || !chosenInteraction || !currentSession) {
+      return;
+    }
+    if (currentSession.status !== 'active') {
+      notify(
+        `Session "${currentSession.id}" is currently stopped by the researcher. Activities cannot be started until the session is active.`,
+        'warning',
+        'Session Stopped'
+      );
+      return;
+    }
+    const startedIso = getSynchronizedIso();
+    setActivityStartedAt(startedIso);
+    if (timerStorageKey) {
+      try {
+        localStorage.setItem(
+          timerStorageKey,
+          JSON.stringify({
+            locationId: chosenLocation.id,
+            activityId: chosenActivity.id,
+            interactionKey: chosenInteraction.key,
+            person: chosenPerson || '',
+            edited: hasEdited,
+            startedAt: startedIso
+          })
+        );
+      } catch {
+        // Ignore storage quota errors
+      }
+    }
+  };
+
+  const handleCancelActivity = () => {
+    setActivityStartedAt(null);
+    if (timerStorageKey) {
+      try {
+        localStorage.removeItem(timerStorageKey);
+      } catch {
+        // Ignore storage errors
+      }
+    }
+  };
+
+  // 3. Stop Activity & Submit Handler
   const handleSubmitAnnotation = async () => {
-    if (!chosenLocation || !chosenActivity || !chosenInteraction || !currentSession || !config) {
+    if (!chosenLocation || !chosenActivity || !chosenInteraction || !currentSession || !config || !activityStartedAt) {
       return;
     }
 
@@ -317,14 +393,14 @@ export const App: React.FC = () => {
 
     setIsSubmitting(true);
     const clientUuid = crypto.randomUUID();
-    const tsSubmitted = getSynchronizedIso();
+    const tsStopped = getSynchronizedIso();
 
     const payload = {
       client_uuid: clientUuid,
       session_id: currentSession.id,
       participant,
-      timestamp_started: stepStartedAt,
-      timestamp_submitted: tsSubmitted,
+      timestamp_started: activityStartedAt,
+      timestamp_submitted: tsStopped,
       location_id: chosenLocation.id,
       location: chosenLocation.name,
       activity_id: chosenActivity.id,
@@ -352,7 +428,23 @@ export const App: React.FC = () => {
         notify('Offline or network issue — saved locally and queued for automatic sync.', 'info', 'Queued Offline');
       }
 
-      setSubmitSuccessMsg(`Saved: ${chosenLocation.shortLabel || chosenLocation.name} - ${chosenActivity.shortLabel || chosenActivity.name}`);
+      if (timerStorageKey) {
+        try {
+          localStorage.removeItem(timerStorageKey);
+        } catch {
+          // Ignore storage errors
+        }
+      }
+
+      const startMs = Date.parse(activityStartedAt);
+      const stopMs = Date.parse(tsStopped);
+      const durationSec = !Number.isNaN(startMs) && !Number.isNaN(stopMs)
+        ? Math.max(0, (stopMs - startMs) / 1000).toFixed(1)
+        : null;
+
+      setSubmitSuccessMsg(
+        `Saved: ${chosenLocation.shortLabel || chosenLocation.name} - ${chosenActivity.shortLabel || chosenActivity.name}${durationSec ? ` (${durationSec}s)` : ''}`
+      );
 
       setTimeout(() => {
         setSubmitSuccessMsg(null);
@@ -362,7 +454,7 @@ export const App: React.FC = () => {
         setChosenInteraction(null);
         setChosenPerson(null);
         setHasEdited(false);
-        setStepStartedAt(getSynchronizedIso());
+        setActivityStartedAt(null);
         setIsSubmitting(false);
         refreshLiveState();
       }, 1100);
@@ -556,7 +648,7 @@ export const App: React.FC = () => {
                       2: 'Activity',
                       3: 'Interaction',
                       4: 'Collaborator',
-                      5: 'Confirm'
+                      5: activityStartedAt ? 'Running' : 'Start / Stop'
                     };
                     return (
                       <div className="step-progress-wrap" aria-label={`Step ${displayStep} of ${displayTotal}`}>
@@ -578,6 +670,7 @@ export const App: React.FC = () => {
                     chosenActivity={chosenActivity}
                     chosenInteraction={chosenInteraction}
                     chosenPerson={chosenPerson}
+                    isRunning={Boolean(activityStartedAt)}
                     onEditStep={handleEditStep}
                   />
 
@@ -621,15 +714,18 @@ export const App: React.FC = () => {
                       />
                     )}
 
-                    {/* Screen 5: Review & Submit */}
+                    {/* Screen 5: Start / Stop Activity Timer & Submit */}
                     {currentStep === 5 && chosenLocation && chosenActivity && chosenInteraction && (
                       <Screen5Review
                         location={chosenLocation}
                         activity={chosenActivity}
                         interaction={chosenInteraction}
                         person={chosenPerson}
+                        activityStartedAt={activityStartedAt}
                         onEditStep={handleEditStep}
-                        onSubmit={handleSubmitAnnotation}
+                        onStartActivity={handleStartActivity}
+                        onStopAndSubmit={handleSubmitAnnotation}
+                        onCancelActivity={handleCancelActivity}
                         isSubmitting={isSubmitting}
                         bleActive={bleState.status === 'connected' || bleState.status === 'simulating'}
                       />

@@ -638,6 +638,84 @@ body {
   box-shadow: 0 6px 18px rgba(22, 163, 74, 0.45);
 }
 
+.btn-stop-activity {
+  background-color: #dc2626;
+  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.35);
+}
+
+.btn-stop-activity:hover {
+  background-color: #b91c1c;
+  box-shadow: 0 6px 18px rgba(185, 28, 28, 0.45);
+}
+
+.btn-discard-activity {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.btn-discard-activity:hover {
+  background-color: #fecaca;
+}
+
+.activity-timer-card {
+  background: linear-gradient(135deg, #fef2f2 0%, #fff7ed 100%);
+  border: 2px solid #fca5a5;
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.timer-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.timer-live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+}
+
+.timer-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffffff;
+  animation: pulse 1.2s infinite ease-in-out;
+}
+
+.timer-started-meta {
+  font-size: 13px;
+  color: #7f1d1d;
+}
+
+.timer-elapsed-digits {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 36px;
+  font-weight: 800;
+  color: #991b1b;
+  letter-spacing: 1px;
+  margin: 4px 0;
+}
+
+.timer-help-text {
+  margin: 0;
+  font-size: 13px;
+  color: #7f1d1d;
+}
+
 /* ========================================================================== */
 /* 4. ADMIN & RESEARCHER CONSOLE (MODULAR TABS ARCHITECTURE)                  */
 /* ========================================================================== */
