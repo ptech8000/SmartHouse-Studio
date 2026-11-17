@@ -153,6 +153,18 @@ export async function importEnvironmentJson(payload: unknown): Promise<Environme
   return res.json();
 }
 
+function triggerBlobDownload(blob: Blob, filename: string): string {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return filename;
+}
+
 export async function downloadEnvironmentJson(id: string, envName?: string): Promise<string> {
   const res = await apiFetch(`/environments/${encodeURIComponent(id)}/export.json`);
   if (!res.ok) throw await parseError(res, 'Failed to download environment JSON');
@@ -164,16 +176,43 @@ export async function downloadEnvironmentJson(id: string, envName?: string): Pro
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'environment';
   const filename = match?.[1] || `${fallbackSlug}.environment.json`;
+  return triggerBlobDownload(blob, filename);
+}
 
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return filename;
+export async function fetchStorageHealth(): Promise<{ ok: boolean; engine: string; persistent: boolean }> {
+  const res = await apiFetch('/health');
+  if (!res.ok) throw await parseError(res, 'Failed to check database health');
+  return res.json();
+}
+
+export async function downloadFullBackupJson(): Promise<string> {
+  const res = await apiFetch('/backup/export.json');
+  if (!res.ok) throw await parseError(res, 'Failed to export database backup');
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match?.[1] || `smarthouse-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  return triggerBlobDownload(blob, filename);
+}
+
+export async function restoreFullBackupJson(payload: unknown): Promise<{
+  success: boolean;
+  summary: {
+    environmentsAdded: number;
+    sessionsAdded: number;
+    tokensAdded: number;
+    annotationsAdded: number;
+    sensorChunksAdded: number;
+    wearablesAdded: number;
+  };
+}> {
+  const res = await apiFetch('/backup/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) throw await parseError(res, 'Failed to restore backup file');
+  return res.json();
 }
 
 export async function deleteEnvironment(id: string): Promise<{ success: boolean; id: string }> {

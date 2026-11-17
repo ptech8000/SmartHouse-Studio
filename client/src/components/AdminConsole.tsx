@@ -34,7 +34,10 @@ import {
   fetchEnvironments,
   importEnvironmentJson,
   downloadEnvironmentJson,
-  deleteEnvironment
+  deleteEnvironment,
+  fetchStorageHealth,
+  downloadFullBackupJson,
+  restoreFullBackupJson
 } from '../services/api';
 import {
   Download,
@@ -51,7 +54,8 @@ import {
   CheckCircle2,
   FileText,
   Layers,
-  CopyPlus
+  CopyPlus,
+  Database
 } from 'lucide-react';
 
 interface AdminConsoleProps {
@@ -93,7 +97,11 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const [filterParticipant, setFilterParticipant] = useState<string>('ALL');
   const [netInfo, setNetInfo] = useState<{ hostIp: string; protocol?: string; localUrl: string; networkUrl: string } | null>(null);
   const [participantTokens, setParticipantTokens] = useState<Record<string, string>>({});
+  const [storageHealth, setStorageHealth] = useState<{ engine: string; persistent: boolean } | null>(null);
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isRestoringBackup, setIsRestoringBackup] = useState(false);
   const directJsonInputRef = useRef<HTMLInputElement | null>(null);
+  const backupInputRef = useRef<HTMLInputElement | null>(null);
 
   const showFeedback = (msg: string, variant: 'success' | 'error' | 'warning' | 'info' = 'success', title?: string) => {
     notify(msg, variant, title);
@@ -124,6 +132,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     loadSessions();
     loadEnvironments();
     fetchNetworkInfo().then(setNetInfo).catch(() => {});
+    fetchStorageHealth().then(h => setStorageHealth({ engine: h.engine, persistent: h.persistent })).catch(() => {});
     const unsub = subscribeVirtualFleet(f => setFleet(f));
     return () => unsub();
   }, []);
@@ -242,6 +251,42 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     }
   };
 
+  const handleDownloadFullBackup = async () => {
+    try {
+      setIsBackingUp(true);
+      const filename = await downloadFullBackupJson();
+      showFeedback(`Downloaded complete database backup "${filename}"!`, 'success', 'Backup Downloaded');
+    } catch (err: any) {
+      showFeedback(`Backup failed: ${err.message}`, 'error', 'Backup Failed');
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
+
+  const handleRestoreBackupFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsRestoringBackup(true);
+      const raw = JSON.parse(await file.text());
+      const res = await restoreFullBackupJson(raw);
+      const s = res.summary;
+      showFeedback(
+        `Restored ${s.sessionsAdded} session(s), ${s.annotationsAdded} annotation(s), ${s.environmentsAdded} environment(s).`,
+        'success',
+        'Backup Restored'
+      );
+      await loadEnvironments();
+      await loadSessions();
+      onRefreshData();
+    } catch (err: any) {
+      showFeedback(`Restore failed: ${err.message}`, 'error', 'Restore Failed');
+    } finally {
+      setIsRestoringBackup(false);
+      e.target.value = '';
+    }
+  };
+
   const handleDeleteSession = async (sId: string) => {
     const confirmed = await confirmDialog({
       title: `Delete Session "${sId}"?`,
@@ -339,6 +384,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
         multiple
         className="hidden-file-input"
         onChange={handleDirectImportJson}
+      />
+      <input
+        ref={backupInputRef}
+        type="file"
+        accept=".json,application/json"
+        className="hidden-file-input"
+        onChange={handleRestoreBackupFile}
       />
       {mustChangePassword && (
         <div className="default-pw-banner" role="alert">
@@ -990,6 +1042,51 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
       {/* ============================================================== */}
       {activeTab === 'config' && (
         <div className="tab-module-content">
+          {/* Database Persistence & Full Backups */}
+          <section className="pro-section">
+            <div className="section-head-pro">
+              <div>
+                <h3>
+                  <Database size={16} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+                  Database Storage &amp; Full Backup
+                </h3>
+                <p>
+                  Active storage:{' '}
+                  <strong>
+                    {storageHealth?.engine === 'postgresql'
+                      ? 'PostgreSQL (Persistent Cloud Storage)'
+                      : storageHealth?.engine === 'sqlite'
+                        ? (storageHealth.persistent ? 'SQLite (Persistent Disk)' : 'Local SQLite')
+                        : 'Checking...'}
+                  </strong>{' '}
+                  • Download a complete portable snapshot of all sessions, annotations, custom environments, and invite tokens, or restore into a fresh database anytime.
+                </p>
+              </div>
+              <div className="section-head-actions">
+                <button
+                  type="button"
+                  className="btn-ui btn-ui-secondary"
+                  disabled={isRestoringBackup}
+                  onClick={() => backupInputRef.current?.click()}
+                  title="Restore sessions, environments, and annotations from a smarthouse-backup .json file"
+                >
+                  <Upload size={15} />
+                  <span>{isRestoringBackup ? 'Restoring...' : 'Restore Backup (.json)'}</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn-ui btn-ui-primary"
+                  disabled={isBackingUp}
+                  onClick={handleDownloadFullBackup}
+                  title="Download full database backup JSON (all sessions, environments, annotations, sensors)"
+                >
+                  <Download size={15} />
+                  <span>{isBackingUp ? 'Preparing...' : 'Download Full Backup (.json)'}</span>
+                </button>
+              </div>
+            </div>
+          </section>
+
           {/* Environments Library & Builder */}
           <section className="pro-section">
             <div className="section-head-pro">

@@ -394,7 +394,72 @@ async function runTests() {
   assert.deepStrictEqual(rebuiltRuleEnv.snapshot.activities.find(a => a.name === 'group cleanup')?.allowedInteractions, ['solo', 'collaborative']);
   console.log('✓ Solo/Collab/Assisted activity rules & JSON round-trip passed all checks');
 
-  console.log('\n🎉 ALL 9 TEST SUITES PASSED CLEANLY!\n');
+  // Test 10: Full Database Backup Export & Restore Round-Trip
+  console.log('\n[10/10] Testing Full Database Backup Export & Restore...');
+  const bkEnvBuilt = buildEnvironmentConfig({
+    name: 'Backup Verification Wing',
+    roles: ['Resident_X', 'Resident_Y'],
+    locations: [{ name: 'Study', activities: [{ name: 'reading', allowedInteractions: ['solo'] }] }]
+  });
+  const bkEnv = await db.createEnvironment({
+    id: 'env_bk_' + Date.now(),
+    name: bkEnvBuilt.name,
+    description: 'Backup check',
+    configHash: bkEnvBuilt.hash,
+    configSnapshot: bkEnvBuilt.snapshot
+  });
+  const bkSessId = 'BK_SESS_' + Date.now();
+  await db.createSession(bkSessId, bkEnv.config_hash, bkEnv.snapshot, 'Europe/Paris', bkEnv.id, bkEnv.name);
+  await db.ensureParticipantTokens(bkSessId, bkEnvBuilt.snapshot.roles);
+  const bkAnnUuid = 'bk-ann-' + Date.now();
+  await db.saveAnnotation({
+    client_uuid: bkAnnUuid,
+    session_id: bkSessId,
+    participant: 'Resident_X',
+    timestamp_started: new Date(Date.now() - 4000).toISOString(),
+    timestamp_submitted: new Date().toISOString(),
+    location_id: 0,
+    location: 'Study',
+    activity_id: 0,
+    activity: 'reading',
+    interaction: 'solo',
+    other_person: '',
+    edited: 0,
+    config_version: bkEnv.config_hash
+  });
+
+  const backupJson = await db.exportBackup();
+  assert.strictEqual(backupJson.format, 'smarthouse-backup-v1');
+  assert.ok(backupJson.data.sessions.some(s => s.id === bkSessId));
+  assert.ok(backupJson.data.annotations.some(a => a.client_uuid === bkAnnUuid));
+  assert.ok(backupJson.data.environments.some(e => e.id === bkEnv.id));
+
+  // Simulate database reset by deleting session + custom env, then restoring from backup JSON
+  await db.deleteSession(bkSessId);
+  await db.deleteEnvironment(bkEnv.id);
+  assert.strictEqual(await db.getSession(bkSessId), null);
+
+  const restoreRes = await db.restoreBackup(backupJson);
+  assert.ok(restoreRes.sessionsAdded >= 1);
+  assert.ok(restoreRes.annotationsAdded >= 1);
+  assert.ok(restoreRes.environmentsAdded >= 1);
+
+  const restoredSess = await db.getSession(bkSessId);
+  const restoredAnns = await db.getAnnotations(bkSessId);
+  assert.ok(restoredSess && restoredSess.id === bkSessId);
+  assert.strictEqual(restoredAnns.length, 1);
+  assert.strictEqual(restoredAnns[0].client_uuid, bkAnnUuid);
+
+  // Re-running restore must be idempotent
+  const secondRestore = await db.restoreBackup(backupJson);
+  assert.strictEqual(secondRestore.sessionsAdded, 0);
+  assert.strictEqual(secondRestore.annotationsAdded, 0);
+
+  await db.deleteSession(bkSessId);
+  await db.deleteEnvironment(bkEnv.id);
+  console.log('✓ Full Database Backup export & idempotent restore passed all checks');
+
+  console.log('\n🎉 ALL 10 TEST SUITES PASSED CLEANLY!\n');
 }
 
 runTests().catch(err => {

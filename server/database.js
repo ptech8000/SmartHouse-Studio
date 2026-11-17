@@ -736,5 +736,208 @@ module.exports = {
   async listWearables() {
     await ensureReady();
     return rootExec.all('SELECT * FROM wearables ORDER BY last_seen DESC');
+  },
+
+  async exportBackup() {
+    await ensureReady();
+    const [environments, sessions, participant_tokens, annotations, sensor_chunks, wearables] = await Promise.all([
+      rootExec.all('SELECT * FROM environments ORDER BY is_default DESC, created_at ASC'),
+      rootExec.all('SELECT * FROM sessions ORDER BY started_at ASC'),
+      rootExec.all('SELECT * FROM participant_tokens ORDER BY created_at ASC'),
+      rootExec.all('SELECT * FROM annotations ORDER BY session_id ASC, seq ASC'),
+      rootExec.all('SELECT * FROM sensor_chunks ORDER BY ts_received ASC'),
+      rootExec.all('SELECT * FROM wearables ORDER BY last_seen DESC')
+    ]);
+
+    return {
+      format: 'smarthouse-backup-v1',
+      exportedAt: new Date().toISOString(),
+      storage: this.getStorageInfo(),
+      data: {
+        environments,
+        sessions,
+        participant_tokens,
+        annotations,
+        sensor_chunks,
+        wearables
+      }
+    };
+  },
+
+  async restoreBackup(backupPayload) {
+    if (!backupPayload || typeof backupPayload !== 'object' || backupPayload.format !== 'smarthouse-backup-v1') {
+      const err = new Error('Invalid backup format. Expected "smarthouse-backup-v1" JSON file.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const data = backupPayload.data;
+    if (!data || typeof data !== 'object') {
+      const err = new Error('Backup file is missing the "data" payload.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const summary = {
+      environmentsAdded: 0,
+      sessionsAdded: 0,
+      tokensAdded: 0,
+      annotationsAdded: 0,
+      sensorChunksAdded: 0,
+      wearablesAdded: 0
+    };
+
+    await inTransaction(async tx => {
+      const envs = Array.isArray(data.environments) ? data.environments : [];
+      for (const env of envs) {
+        if (!env || typeof env.id !== 'string' || !env.id.trim() || env.id === 'default-smart-house') continue;
+        const snapshotStr = typeof env.config_snapshot === 'string'
+          ? env.config_snapshot
+          : JSON.stringify(env.config_snapshot || {});
+        const res = await tx.run(
+          `INSERT INTO environments (id, name, description, config_hash, config_snapshot, is_default, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            env.id.trim(),
+            String(env.name || env.id),
+            String(env.description || ''),
+            String(env.config_hash || ''),
+            snapshotStr,
+            env.is_default ? 1 : 0,
+            String(env.created_at || new Date().toISOString()),
+            String(env.updated_at || new Date().toISOString())
+          ]
+        );
+        summary.environmentsAdded += res.changes;
+      }
+
+      const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+      for (const s of sessions) {
+        if (!s || typeof s.id !== 'string' || !s.id.trim()) continue;
+        const snapshotStr = typeof s.config_snapshot === 'string'
+          ? s.config_snapshot
+          : JSON.stringify(s.config_snapshot || {});
+        const res = await tx.run(
+          `INSERT INTO sessions (id, config_hash, config_snapshot, status, timezone, started_at, ended_at, strict_session_lock, environment_id, environment_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            s.id.trim(),
+            String(s.config_hash || ''),
+            snapshotStr,
+            s.status === 'stopped' ? 'stopped' : 'active',
+            String(s.timezone || 'Europe/Paris'),
+            String(s.started_at || new Date().toISOString()),
+            s.ended_at ? String(s.ended_at) : null,
+            s.strict_session_lock ? 1 : 0,
+            String(s.environment_id || 'default-smart-house'),
+            String(s.environment_name || 'Default Smart House')
+          ]
+        );
+        summary.sessionsAdded += res.changes;
+      }
+
+      const validSessionRows = await tx.all('SELECT id FROM sessions');
+      const validSessionIds = new Set(validSessionRows.map(r => r.id));
+
+      const tokens = Array.isArray(data.participant_tokens) ? data.participant_tokens : [];
+      for (const t of tokens) {
+        if (!t || !t.token || !t.session_id || !t.participant || !validSessionIds.has(t.session_id)) continue;
+        const res = await tx.run(
+          `INSERT INTO participant_tokens (token, session_id, participant, created_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT DO NOTHING`,
+          [
+            String(t.token),
+            String(t.session_id),
+            String(t.participant),
+            String(t.created_at || new Date().toISOString())
+          ]
+        );
+        summary.tokensAdded += res.changes;
+      }
+
+      const annotations = Array.isArray(data.annotations) ? data.annotations : [];
+      for (const a of annotations) {
+        if (!a || !a.client_uuid || !a.session_id || !validSessionIds.has(a.session_id)) continue;
+        const res = await tx.run(
+          `INSERT INTO annotations (
+            client_uuid, session_id, participant, seq,
+            timestamp_started, timestamp_submitted, timestamp_received,
+            location_id, location, activity_id, activity,
+            interaction, other_person, edited, config_version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (client_uuid) DO NOTHING`,
+          [
+            String(a.client_uuid),
+            String(a.session_id),
+            String(a.participant),
+            Number(a.seq || 1),
+            String(a.timestamp_started || a.timestamp_submitted || new Date().toISOString()),
+            String(a.timestamp_submitted || new Date().toISOString()),
+            String(a.timestamp_received || new Date().toISOString()),
+            Number(a.location_id || 0),
+            String(a.location || ''),
+            Number(a.activity_id || 0),
+            String(a.activity || ''),
+            String(a.interaction || 'solo'),
+            String(a.other_person || ''),
+            a.edited ? 1 : 0,
+            String(a.config_version || '')
+          ]
+        );
+        summary.annotationsAdded += res.changes;
+      }
+
+      const chunks = Array.isArray(data.sensor_chunks) ? data.sensor_chunks : [];
+      for (const c of chunks) {
+        if (!c || !c.chunk_uuid || !c.session_id || !validSessionIds.has(c.session_id)) continue;
+        const payloadStr = typeof c.payload === 'string' ? c.payload : JSON.stringify(c.payload ?? null);
+        const res = await tx.run(
+          `INSERT INTO sensor_chunks (
+            chunk_uuid, session_id, participant, device_id,
+            stream_type, sample_count, ts_first_device, ts_last_device,
+            ts_received, payload
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (chunk_uuid) DO NOTHING`,
+          [
+            String(c.chunk_uuid),
+            String(c.session_id),
+            String(c.participant || ''),
+            c.device_id ? String(c.device_id) : null,
+            String(c.stream_type || 'acc_gyro_hr'),
+            Number(c.sample_count || 0),
+            c.ts_first_device != null ? Number(c.ts_first_device) : null,
+            c.ts_last_device != null ? Number(c.ts_last_device) : null,
+            String(c.ts_received || new Date().toISOString()),
+            payloadStr
+          ]
+        );
+        summary.sensorChunksAdded += res.changes;
+      }
+
+      const wearables = Array.isArray(data.wearables) ? data.wearables : [];
+      for (const w of wearables) {
+        if (!w || !w.device_id) continue;
+        const res = await tx.run(
+          `INSERT INTO wearables (device_id, session_id, participant, device_name, device_family, battery_level, last_seen, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (device_id) DO NOTHING`,
+          [
+            String(w.device_id),
+            w.session_id && validSessionIds.has(w.session_id) ? String(w.session_id) : null,
+            w.participant ? String(w.participant) : null,
+            String(w.device_name || 'Smartwatch'),
+            String(w.device_family || 'polar'),
+            Number(w.battery_level ?? 100),
+            String(w.last_seen || new Date().toISOString()),
+            String(w.status || 'disconnected')
+          ]
+        );
+        summary.wearablesAdded += res.changes;
+      }
+    });
+
+    return summary;
   }
 };

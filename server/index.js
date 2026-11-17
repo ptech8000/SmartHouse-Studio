@@ -37,12 +37,16 @@ app.disable('x-powered-by');
 app.use(securityHeadersMiddleware);
 app.use(cors(createCorsOptions(PORT)));
 
-// Tight default JSON body limit (100kb), with 2mb limit scoped strictly to BLE telemetry chunks
+// Tight default JSON body limit (100kb), with scoped larger limits only for BLE chunks and backup restore
 const defaultJsonParser = express.json({ limit: '100kb' });
 const bleJsonParser = express.json({ limit: '2mb' });
+const backupJsonParser = express.json({ limit: '10mb' });
 app.use((req, res, next) => {
   if (req.path === '/api/ble/sensor-chunks') {
     return bleJsonParser(req, res, next);
+  }
+  if (req.path === '/api/backup/restore') {
+    return backupJsonParser(req, res, next);
   }
   return defaultJsonParser(req, res, next);
 });
@@ -905,6 +909,38 @@ app.get('/api/sessions/:id/export.csv', requireAdmin, async (req, res) => {
     res.status(200).send(csvContent);
   } catch (err) {
     safeServerError(res, err, 'Error generating CSV export');
+  }
+});
+
+// ==========================================================================
+// 7. FULL DATABASE BACKUP EXPORT & RESTORE (Admin only)
+// ==========================================================================
+
+app.get('/api/backup/export.json', requireAdmin, async (req, res) => {
+  try {
+    const backup = await db.exportBackup();
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="smarthouse-backup-${dateStamp}.json"`);
+    res.status(200).send(JSON.stringify(backup, null, 2));
+  } catch (err) {
+    safeServerError(res, err, 'Failed to export database backup');
+  }
+});
+
+app.post('/api/backup/restore', requireAdmin, apiWriteLimiter, async (req, res) => {
+  try {
+    const sessions = Array.isArray(req.body?.data?.sessions) ? req.body.data.sessions : [];
+    for (const s of sessions) {
+      const check = validateSessionId(s?.id);
+      if (!check.valid) {
+        return res.status(400).json({ error: `Invalid session ID in backup: ${check.error}` });
+      }
+    }
+    const summary = await db.restoreBackup(req.body);
+    res.status(200).json({ success: true, summary });
+  } catch (err) {
+    safeServerError(res, err, 'Failed to restore database backup');
   }
 });
 
