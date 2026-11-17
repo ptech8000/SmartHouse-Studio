@@ -195,6 +195,38 @@ export async function downloadFullBackupJson(): Promise<string> {
   return triggerBlobDownload(blob, filename);
 }
 
+export interface GitBackupStatus {
+  configured: boolean;
+  repo: string | null;
+  branch: string;
+  tokenSet: boolean;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastStatus: 'idle' | 'ok' | 'skipped' | 'error';
+  lastError: string | null;
+  lastReason: string | null;
+  lastCommitUrl: string | null;
+}
+
+export async function fetchGitBackupStatus(): Promise<GitBackupStatus> {
+  const res = await apiFetch('/backup/github/status');
+  if (!res.ok) throw await parseError(res, 'Failed to check private Git backup status');
+  return res.json();
+}
+
+export async function triggerGitBackupNow(): Promise<{
+  success: boolean;
+  skipped?: boolean;
+  repo: string;
+  branch: string;
+  commitUrl?: string | null;
+  counts?: { sessions: number; annotations: number; environments: number };
+}> {
+  const res = await apiFetch('/backup/github', { method: 'POST' });
+  if (!res.ok) throw await parseError(res, 'Failed to push backup to private GitHub repository');
+  return res.json();
+}
+
 export async function restoreFullBackupJson(payload: unknown): Promise<{
   success: boolean;
   summary: {

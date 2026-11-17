@@ -23,3 +23,6 @@ services:
         fromDatabase:
           name: smarthouse-db
           property: connectionString
+      # Optional: set GITHUB_BACKUP_REPO (e.g. owner/smarthouse-backups) and
+      # GITHUB_BACKUP_TOKEN (fine-grained PAT on that private repo) in Render
+      # Dashboard -> Environment for automated private GitHub backups.

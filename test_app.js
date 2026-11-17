@@ -6,6 +6,7 @@ const {
   parseEnvironmentImportPayload
 } = require('./server/configPipeline');
 const db = require('./server/database');
+const gitBackup = require('./server/gitBackup');
 const { generateAnnotationsCsv } = require('./server/csvExport');
 const { hashPassword, verifyPassword, validateAnnotationPayload, validateSessionId } = require('./server/security');
 
@@ -459,7 +460,66 @@ async function runTests() {
   await db.deleteEnvironment(bkEnv.id);
   console.log('✓ Full Database Backup export & idempotent restore passed all checks');
 
-  console.log('\n🎉 ALL 10 TEST SUITES PASSED CLEANLY!\n');
+  // Test 11: Private GitHub Automated Backup Engine
+  console.log('\n[11/11] Testing Private GitHub Backup Engine...');
+  assert.deepStrictEqual(
+    gitBackup.parseRepoSlug('https://github.com/ptech8000/smarthouse-backups.git'),
+    { owner: 'ptech8000', repo: 'smarthouse-backups', slug: 'ptech8000/smarthouse-backups' }
+  );
+  assert.strictEqual(gitBackup.parseRepoSlug('invalid/repo/extra'), null);
+
+  // Must refuse public repositories
+  await assert.rejects(
+    () =>
+      gitBackup.runBackupNow({
+        reason: 'test-public-guard',
+        force: true,
+        env: { GITHUB_BACKUP_REPO: 'ptech8000/SmartHouse-Studio', GITHUB_BACKUP_TOKEN: 'tok_test' },
+        exportBackupFn: () => db.exportBackup(),
+        fetchFn: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({ private: false, default_branch: 'main' })
+        })
+      }),
+    /must.*PRIVATE|PUBLIC/i,
+    'Must reject pushing backups to a public repository'
+  );
+
+  // Must push latest.json & daily snapshot cleanly to a private repository
+  const uploadedFiles = [];
+  const ghResult = await gitBackup.runBackupNow({
+    reason: 'test-private',
+    force: true,
+    env: { GITHUB_BACKUP_REPO: 'ptech8000/smarthouse-backups', GITHUB_BACKUP_TOKEN: 'tok_test' },
+    exportBackupFn: () => db.exportBackup(),
+    fetchFn: async (url, opts = {}) => {
+      if (opts.method === 'PUT') {
+        const body = JSON.parse(opts.body);
+        uploadedFiles.push({ url, message: body.message, branch: body.branch, contentLen: body.content.length });
+        return {
+          ok: true,
+          status: 201,
+          json: async () => ({ commit: { html_url: 'https://github.com/ptech8000/smarthouse-backups/commit/abc' } })
+        };
+      }
+      if (url.includes('/contents/')) {
+        return { ok: false, status: 404, text: async () => '{}' };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ private: true, default_branch: 'main' })
+      };
+    }
+  });
+  assert.strictEqual(ghResult.success, true);
+  assert.strictEqual(uploadedFiles.length, 2, 'Must upload both latest.json and daily backup snapshot');
+  assert.ok(uploadedFiles[0].url.includes('backups/latest.json'));
+  assert.ok(uploadedFiles[1].url.includes('backups/smarthouse-backup-'));
+  console.log('✓ Private GitHub backup safety checks & file uploads passed');
+
+  console.log('\n🎉 ALL 11 TEST SUITES PASSED CLEANLY!\n');
 }
 
 runTests().catch(err => {

@@ -3557,6 +3557,55 @@ body {
   font-weight: 600;
 }
 
+.git-backup-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+}
+
+.git-backup-panel.is-configured {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.git-backup-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 240px;
+}
+
+.git-backup-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+  color: var(--text-heading);
+}
+
+.git-backup-desc {
+  margin: 0;
+  font-size: 12.5px;
+  color: #334155;
+  line-height: 1.45;
+}
+
+.git-backup-err {
+  display: block;
+  color: #b91c1c;
+  font-weight: 600;
+  margin-top: 3px;
+}
+
 @media (max-width: 640px) {
   .env-select-input {
     width: 100%;

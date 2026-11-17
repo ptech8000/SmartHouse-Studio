@@ -37,8 +37,11 @@ import {
   deleteEnvironment,
   fetchStorageHealth,
   downloadFullBackupJson,
-  restoreFullBackupJson
+  restoreFullBackupJson,
+  fetchGitBackupStatus,
+  triggerGitBackupNow
 } from '../services/api';
+import type { GitBackupStatus } from '../services/api';
 import {
   Download,
   Upload,
@@ -98,8 +101,10 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
   const [netInfo, setNetInfo] = useState<{ hostIp: string; protocol?: string; localUrl: string; networkUrl: string } | null>(null);
   const [participantTokens, setParticipantTokens] = useState<Record<string, string>>({});
   const [storageHealth, setStorageHealth] = useState<{ engine: string; persistent: boolean } | null>(null);
+  const [gitBackupStatus, setGitBackupStatus] = useState<GitBackupStatus | null>(null);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isRestoringBackup, setIsRestoringBackup] = useState(false);
+  const [isPushingGitBackup, setIsPushingGitBackup] = useState(false);
   const directJsonInputRef = useRef<HTMLInputElement | null>(null);
   const backupInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -133,6 +138,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     loadEnvironments();
     fetchNetworkInfo().then(setNetInfo).catch(() => {});
     fetchStorageHealth().then(h => setStorageHealth({ engine: h.engine, persistent: h.persistent })).catch(() => {});
+    fetchGitBackupStatus().then(setGitBackupStatus).catch(() => {});
     const unsub = subscribeVirtualFleet(f => setFleet(f));
     return () => unsub();
   }, []);
@@ -284,6 +290,26 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
     } finally {
       setIsRestoringBackup(false);
       e.target.value = '';
+    }
+  };
+
+  const handlePushGitBackupNow = async () => {
+    try {
+      setIsPushingGitBackup(true);
+      const res = await triggerGitBackupNow();
+      showFeedback(
+        res.skipped
+          ? `Private Git repo "${res.repo}" is already up to date.`
+          : `Backed up ${res.counts?.sessions ?? 0} sessions and ${res.counts?.annotations ?? 0} annotations to "${res.repo}".`,
+        'success',
+        'Private Git Backup Saved'
+      );
+      fetchGitBackupStatus().then(setGitBackupStatus).catch(() => {});
+    } catch (err: any) {
+      showFeedback(`Private Git backup error: ${err.message}`, 'error', 'Backup Failed');
+      fetchGitBackupStatus().then(setGitBackupStatus).catch(() => {});
+    } finally {
+      setIsPushingGitBackup(false);
     }
   };
 
@@ -1084,6 +1110,45 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({
                   <span>{isBackingUp ? 'Preparing...' : 'Download Full Backup (.json)'}</span>
                 </button>
               </div>
+            </div>
+
+            <div className={`git-backup-panel ${gitBackupStatus?.configured ? 'is-configured' : 'is-unconfigured'}`}>
+              <div className="git-backup-info">
+                <div className="git-backup-title-row">
+                  <strong>Automatic Private GitHub Backup:</strong>
+                  <span className={`status-pill ${gitBackupStatus?.configured ? 'pill-active' : 'pill-ended'}`}>
+                    {gitBackupStatus?.configured ? '● AUTO-BACKUP ACTIVE' : 'NOT CONFIGURED'}
+                  </span>
+                </div>
+                {gitBackupStatus?.configured ? (
+                  <p className="git-backup-desc">
+                    Automatically commits <code>backups/latest.json</code> and daily snapshots to private repository{' '}
+                    <code>{gitBackupStatus.repo}</code> after session/annotation updates.
+                    {gitBackupStatus.lastSuccessAt && (
+                      <> Last saved: <strong>{new Date(gitBackupStatus.lastSuccessAt).toLocaleString()}</strong>.</>
+                    )}
+                    {gitBackupStatus.lastStatus === 'error' && gitBackupStatus.lastError && (
+                      <span className="git-backup-err"> Last error: {gitBackupStatus.lastError}</span>
+                    )}
+                  </p>
+                ) : (
+                  <p className="git-backup-desc">
+                    Create a <strong>private</strong> GitHub repository (e.g. <code>ptech8000/smarthouse-backups</code>) and set{' '}
+                    <code>GITHUB_BACKUP_REPO</code> + <code>GITHUB_BACKUP_TOKEN</code> in Render Dashboard → Environment to enable automatic off-site commits.
+                  </p>
+                )}
+              </div>
+              {gitBackupStatus?.configured && (
+                <button
+                  type="button"
+                  className="btn-ui btn-ui-soft-blue"
+                  disabled={isPushingGitBackup}
+                  onClick={handlePushGitBackupNow}
+                >
+                  <RefreshCw size={14} />
+                  <span>{isPushingGitBackup ? 'Pushing...' : 'Push to Private Git Now'}</span>
+                </button>
+              )}
             </div>
           </section>
 

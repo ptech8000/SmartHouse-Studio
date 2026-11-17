@@ -12,6 +12,7 @@ const {
   parseEnvironmentImportPayload
 } = require('./configPipeline');
 const db = require('./database');
+const gitBackup = require('./gitBackup');
 const { generateAnnotationsCsv } = require('./csvExport');
 const {
   TOKEN_TTL_MS,
@@ -197,7 +198,12 @@ app.get('/api/time', (req, res) => {
 app.get('/api/health', async (_req, res) => {
   try {
     await db.ping();
-    res.json({ ok: true, ...db.getStorageInfo(), serverTime: Date.now() });
+    res.json({
+      ok: true,
+      ...db.getStorageInfo(),
+      gitBackupConfigured: gitBackup.getConfig().configured,
+      serverTime: Date.now()
+    });
   } catch {
     res.status(503).json({ ok: false, error: 'Database unavailable' });
   }
@@ -422,6 +428,10 @@ app.get('/api/environments', requireAdmin, async (req, res) => {
   }
 });
 
+function queuePrivateGitBackup(reason, delayMs = 30000) {
+  gitBackup.scheduleAutoBackup(reason, () => db.exportBackup(), delayMs);
+}
+
 app.post('/api/environments', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
     const result = await createAndStoreEnvironmentFromInput(req.body);
@@ -432,6 +442,7 @@ app.post('/api/environments', requireAdmin, apiWriteLimiter, async (req, res) =>
         warnings: result.built.warnings
       });
     }
+    queuePrivateGitBackup('environment-created', 20000);
     res.status(201).json({ ...result.created, warnings: result.warnings });
   } catch (err) {
     safeServerError(res, err, 'Failed to create environment');
@@ -449,6 +460,7 @@ app.post('/api/environments/import', requireAdmin, apiWriteLimiter, async (req, 
         warnings: result.built.warnings
       });
     }
+    queuePrivateGitBackup('environment-imported', 20000);
     res.status(201).json({ ...result.created, warnings: result.warnings });
   } catch (err) {
     safeServerError(res, err, 'Failed to import environment JSON');
@@ -481,6 +493,7 @@ app.delete('/api/environments/:id', requireAdmin, apiWriteLimiter, async (req, r
       return res.status(400).json({ error: 'The built-in default environment cannot be deleted' });
     }
     await db.deleteEnvironment(env.id);
+    queuePrivateGitBackup('environment-deleted', 20000);
     res.json({ success: true, id: env.id });
   } catch (err) {
     safeServerError(res, err, 'Failed to delete environment');
@@ -551,6 +564,7 @@ app.post('/api/sessions', requireAdmin, apiWriteLimiter, async (req, res) => {
     const session = await db.createSession(sessCheck.value, envHash, envSnapshot, timezone, envId, envName);
     const roles = envSnapshot?.roles || ['Person_A', 'Person_B', 'Person_C'];
     const tokens = await db.ensureParticipantTokens(session.id, roles);
+    queuePrivateGitBackup('session-created', 15000);
     res.status(201).json({ ...session, participantTokens: tokens });
   } catch (err) {
     safeServerError(res, err, 'Failed to create session');
@@ -593,6 +607,7 @@ app.post('/api/sessions/:id/start', requireAdmin, apiWriteLimiter, async (req, r
   try {
     const session = await db.startSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
+    queuePrivateGitBackup('session-started', 15000);
     res.json({ message: 'Session started', session });
   } catch (err) {
     safeServerError(res, err, 'Failed to start session');
@@ -603,6 +618,7 @@ app.post('/api/sessions/:id/stop', requireAdmin, apiWriteLimiter, async (req, re
   try {
     const session = await db.stopSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
+    queuePrivateGitBackup('session-stopped', 2000);
     res.json({ message: 'Session stopped', session });
   } catch (err) {
     safeServerError(res, err, 'Failed to stop session');
@@ -613,6 +629,7 @@ app.post('/api/sessions/:id/end', requireAdmin, apiWriteLimiter, async (req, res
   try {
     const session = await db.stopSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
+    queuePrivateGitBackup('session-ended', 2000);
     res.json({ message: 'Session ended', session });
   } catch (err) {
     safeServerError(res, err, 'Failed to end session');
@@ -622,6 +639,7 @@ app.post('/api/sessions/:id/end', requireAdmin, apiWriteLimiter, async (req, res
 app.delete('/api/sessions/:id', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
     await db.deleteSession(req.params.id);
+    queuePrivateGitBackup('session-deleted', 15000);
     res.json({ success: true, message: `Session ${req.params.id} deleted` });
   } catch (err) {
     safeServerError(res, err, 'Failed to delete session');
@@ -675,6 +693,10 @@ app.post('/api/test/generate-annotation', requireAdmin, apiWriteLimiter, async (
       ...validation.data,
       config_version: session.config_hash || cachedConfig.hash
     });
+
+    if (!result.isDuplicate) {
+      queuePrivateGitBackup('test-annotation-generated', 30000);
+    }
 
     res.status(201).json(result);
   } catch (err) {
@@ -783,6 +805,10 @@ app.post('/api/annotations', requireAdminOrParticipant, apiWriteLimiter, async (
       config_version: session.config_hash || cachedConfig.hash,
       keep_session_lock: Boolean(session.strict_session_lock)
     });
+
+    if (!isDuplicate) {
+      queuePrivateGitBackup('annotation-saved', 30000);
+    }
 
     res.status(201).json({
       success: true,
@@ -938,9 +964,27 @@ app.post('/api/backup/restore', requireAdmin, apiWriteLimiter, async (req, res) 
       }
     }
     const summary = await db.restoreBackup(req.body);
+    queuePrivateGitBackup('backup-restored', 5000);
     res.status(200).json({ success: true, summary });
   } catch (err) {
     safeServerError(res, err, 'Failed to restore database backup');
+  }
+});
+
+app.get('/api/backup/github/status', requireAdmin, (_req, res) => {
+  res.json(gitBackup.getStatus());
+});
+
+app.post('/api/backup/github', requireAdmin, apiWriteLimiter, async (req, res) => {
+  try {
+    const result = await gitBackup.runBackupNow({
+      reason: 'manual',
+      force: true,
+      exportBackupFn: () => db.exportBackup()
+    });
+    res.status(200).json(result);
+  } catch (err) {
+    safeServerError(res, err, 'Failed to push backup to private GitHub repository');
   }
 });
 
@@ -972,6 +1016,11 @@ async function startServer() {
   await db.init();
   if (cachedConfig.valid) {
     await db.ensureDefaultEnvironment(cachedConfig.hash, cachedConfig.snapshot);
+  }
+  const gitCfg = gitBackup.getConfig();
+  if (gitCfg.configured) {
+    gitBackup.startPeriodicBackup(() => db.exportBackup());
+    console.log(`[GitBackup] Auto-backup enabled for private repo "${gitCfg.slug}"`);
   }
 
   const certPath = process.env.SSL_CERT_PATH;
