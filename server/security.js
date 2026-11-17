@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days (persisted in database)
 
 // ==========================================================================
 // 1. CRYPTOGRAPHIC PASSWORD & SESSION TOKEN UTILITIES

@@ -34,8 +34,10 @@ async function runTests() {
 
   // Test 2: Database Operations & Idempotency
   console.log('\n[2/4] Testing Database & Idempotency...');
+  await db.init();
+  assert.strictEqual(await db.ping(), true, 'Database ping must succeed');
   const testSessionId = 'TEST_' + Date.now();
-  const session = db.createSession(testSessionId, cfg.hash, cfg.snapshot, 'Europe/Paris');
+  const session = await db.createSession(testSessionId, cfg.hash, cfg.snapshot, 'Europe/Paris');
   assert.strictEqual(session.id, testSessionId);
   assert.strictEqual(session.status, 'active');
 
@@ -57,19 +59,19 @@ async function runTests() {
   };
 
   // First save: should succeed and create row with seq = 1
-  const firstSave = db.saveAnnotation(annotationPayload);
+  const firstSave = await db.saveAnnotation(annotationPayload);
   assert.strictEqual(firstSave.isDuplicate, false, 'First save must not be duplicate');
   assert.strictEqual(firstSave.row.seq, 1, 'First annotation seq must be 1');
 
   // Second save with SAME client_uuid: should be detected as duplicate (idempotent!)
-  const secondSave = db.saveAnnotation(annotationPayload);
+  const secondSave = await db.saveAnnotation(annotationPayload);
   assert.strictEqual(secondSave.isDuplicate, true, 'Duplicate save must be detected');
   assert.strictEqual(secondSave.row.client_uuid, clientUuid);
   console.log('✓ Database & Idempotency passed all checks');
 
   // Test 3: PRD CSV Export Format
   console.log('\n[3/4] Testing CSV Export...');
-  const annotations = db.getAnnotations(testSessionId);
+  const annotations = await db.getAnnotations(testSessionId);
   assert.strictEqual(annotations.length, 1);
   const csv = generateAnnotationsCsv(annotations);
   assert.ok(csv.startsWith('\uFEFF'), 'CSV must start with UTF-8 BOM');
@@ -86,7 +88,7 @@ async function runTests() {
   // Test 4: BLE Sensor Chunks Storage
   console.log('\n[4/4] Testing BLE Sensor Storage...');
   const chunkUuid = 'chunk_' + Date.now();
-  db.saveSensorChunk({
+  await db.saveSensorChunk({
     chunk_uuid: chunkUuid,
     session_id: testSessionId,
     participant: 'Person_A',
@@ -129,7 +131,7 @@ async function runTests() {
   assert.ok(formulaCsv.includes("'=HYPERLINK"), 'CSV formula injection must be neutralized');
 
   // Clean up test session
-  db.deleteSession(testSessionId);
+  await db.deleteSession(testSessionId);
   console.log('✓ Security controls passed all checks');
 
   // Test 6: Custom Environment Creation & Session Binding
@@ -149,7 +151,7 @@ async function runTests() {
   assert.strictEqual(builtEnv.snapshot.activities.length, 3, 'Shared activity names must deduplicate cleanly');
 
   const envId = 'env_test_' + Date.now();
-  const savedEnv = db.createEnvironment({
+  const savedEnv = await db.createEnvironment({
     id: envId,
     name: builtEnv.name,
     description: builtEnv.description,
@@ -159,7 +161,7 @@ async function runTests() {
   assert.strictEqual(savedEnv.name, 'Rehab Kitchen Lab');
 
   const customSessionId = 'ENV_SESS_' + Date.now();
-  const customSess = db.createSession(
+  const customSess = await db.createSession(
     customSessionId,
     savedEnv.config_hash,
     savedEnv.snapshot,
@@ -182,66 +184,73 @@ async function runTests() {
   }, savedEnv.snapshot);
   assert.strictEqual(customAnnCheck.valid, true, 'Annotation using custom environment roles & locations must validate');
 
-  db.deleteSession(customSessionId);
-  db.deleteEnvironment(envId);
+  await db.deleteSession(customSessionId);
+  await db.deleteEnvironment(envId);
   console.log('✓ Custom Environment creation & session binding passed all checks');
 
-  // Test 7: Unrestricted Multi-Person Pairing (No Collaborator Locks)
+  // Test 7: Unrestricted Multi-Person Pairing & Concurrent Sequence Safety
   console.log('\n[7/7] Testing Unrestricted Multi-Person Pairing...');
   const pairSessId = 'PAIR_TEST_' + Date.now();
-  db.createSession(pairSessId, cfg.hash, cfg.snapshot, 'Europe/Paris');
+  await db.createSession(pairSessId, cfg.hash, cfg.snapshot, 'Europe/Paris');
 
-  const pairAB = db.saveAnnotation({
-    client_uuid: 'pair-ab-' + Date.now(),
-    session_id: pairSessId,
-    participant: 'Person_A',
-    timestamp_started: new Date(Date.now() - 4000).toISOString(),
-    timestamp_submitted: new Date().toISOString(),
-    location_id: 2,
-    location: 'living',
-    activity_id: 19,
-    activity: 'vacuuming living',
-    interaction: 'collaborative',
-    other_person: 'Person_B',
-    edited: 0,
-    config_version: cfg.hash
-  });
-  const pairAC = db.saveAnnotation({
-    client_uuid: 'pair-ac-' + Date.now(),
-    session_id: pairSessId,
-    participant: 'Person_A',
-    timestamp_started: new Date(Date.now() - 3000).toISOString(),
-    timestamp_submitted: new Date().toISOString(),
-    location_id: 2,
-    location: 'living',
-    activity_id: 19,
-    activity: 'vacuuming living',
-    interaction: 'collaborative',
-    other_person: 'Person_C',
-    edited: 0,
-    config_version: cfg.hash
-  });
-  const pairCB = db.saveAnnotation({
-    client_uuid: 'pair-cb-' + Date.now(),
-    session_id: pairSessId,
-    participant: 'Person_C',
-    timestamp_started: new Date(Date.now() - 2000).toISOString(),
-    timestamp_submitted: new Date().toISOString(),
-    location_id: 2,
-    location: 'living',
-    activity_id: 19,
-    activity: 'vacuuming living',
-    interaction: 'collaborative',
-    other_person: 'Person_B',
-    edited: 0,
-    config_version: cfg.hash
-  });
+  const [pairAB, pairAC, pairCB] = await Promise.all([
+    db.saveAnnotation({
+      client_uuid: 'pair-ab-' + Date.now(),
+      session_id: pairSessId,
+      participant: 'Person_A',
+      timestamp_started: new Date(Date.now() - 4000).toISOString(),
+      timestamp_submitted: new Date().toISOString(),
+      location_id: 2,
+      location: 'living',
+      activity_id: 19,
+      activity: 'vacuuming living',
+      interaction: 'collaborative',
+      other_person: 'Person_B',
+      edited: 0,
+      config_version: cfg.hash
+    }),
+    db.saveAnnotation({
+      client_uuid: 'pair-ac-' + Date.now(),
+      session_id: pairSessId,
+      participant: 'Person_A',
+      timestamp_started: new Date(Date.now() - 3000).toISOString(),
+      timestamp_submitted: new Date().toISOString(),
+      location_id: 2,
+      location: 'living',
+      activity_id: 19,
+      activity: 'vacuuming living',
+      interaction: 'collaborative',
+      other_person: 'Person_C',
+      edited: 0,
+      config_version: cfg.hash
+    }),
+    db.saveAnnotation({
+      client_uuid: 'pair-cb-' + Date.now(),
+      session_id: pairSessId,
+      participant: 'Person_C',
+      timestamp_started: new Date(Date.now() - 2000).toISOString(),
+      timestamp_submitted: new Date().toISOString(),
+      location_id: 2,
+      location: 'living',
+      activity_id: 19,
+      activity: 'vacuuming living',
+      interaction: 'collaborative',
+      other_person: 'Person_B',
+      edited: 0,
+      config_version: cfg.hash
+    })
+  ]);
   assert.strictEqual(pairAB.row.other_person, 'Person_B');
   assert.strictEqual(pairAC.row.other_person, 'Person_C');
   assert.strictEqual(pairCB.row.other_person, 'Person_B');
-  assert.strictEqual(db.getSessionLocks(pairSessId).length, 0, 'Session must not create collaborator locks');
+  assert.notStrictEqual(pairAB.row.seq, pairAC.row.seq, 'Concurrent annotations must receive distinct seq numbers');
+  assert.strictEqual((await db.getSessionLocks(pairSessId)).length, 0, 'Session must not create collaborator locks');
 
-  db.deleteSession(pairSessId);
+  const summaries = await db.getSessionSummaries();
+  const pairSummary = summaries.find(s => s.id === pairSessId);
+  assert.strictEqual(pairSummary.annotation_count, 3);
+
+  await db.deleteSession(pairSessId);
   console.log('✓ Unrestricted multi-person pairing passed all checks');
 
   // Test 8: Environment JSON Export & Upload/Import Round-Trip

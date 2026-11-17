@@ -83,26 +83,17 @@ function parseSessionSnapshot(session) {
   return cachedConfig.snapshot;
 }
 
-// Sync default environment preset without auto-creating/starting any session
-try {
-  if (cachedConfig.valid) {
-    db.ensureDefaultEnvironment(cachedConfig.hash, cachedConfig.snapshot);
-  }
-} catch (e) {
-  console.warn('[Database] Seed warning:', e.message);
-}
-
 // ==========================================================================
 // AUTHENTICATION HELPERS & MIDDLEWARE
 // ==========================================================================
 
-function resolveAdminAuth(req) {
+async function resolveAdminAuth(req) {
   const cookies = parseCookies(req.headers.cookie);
   const rawSid = cookies[ADMIN_COOKIE_NAME];
   if (!rawSid) return null;
-  const sessionRow = db.getAdminSession(hashToken(rawSid));
+  const sessionRow = await db.getAdminSession(hashToken(rawSid));
   if (!sessionRow) return null;
-  const user = db.getAdminUser(sessionRow.username);
+  const user = await db.getAdminUser(sessionRow.username);
   if (!user) return null;
   return {
     username: user.username,
@@ -111,7 +102,7 @@ function resolveAdminAuth(req) {
   };
 }
 
-function resolveParticipantAuth(req) {
+async function resolveParticipantAuth(req) {
   const headerTok = req.headers['x-participant-token'];
   const queryTok = req.query?.token;
   const rawTok = typeof headerTok === 'string' && headerTok.trim()
@@ -123,27 +114,35 @@ function resolveParticipantAuth(req) {
   return db.getParticipantToken(rawTok);
 }
 
-function requireAdmin(req, res, next) {
-  const admin = resolveAdminAuth(req);
-  if (!admin) {
-    return res.status(401).json({ error: 'Admin authentication required' });
-  }
-  req.adminAuth = admin;
-  next();
-}
-
-function requireAdminOrParticipant(req, res, next) {
-  const admin = resolveAdminAuth(req);
-  if (admin) {
+async function requireAdmin(req, res, next) {
+  try {
+    const admin = await resolveAdminAuth(req);
+    if (!admin) {
+      return res.status(401).json({ error: 'Admin authentication required' });
+    }
     req.adminAuth = admin;
     return next();
+  } catch (err) {
+    return next(err);
   }
-  const participantAuth = resolveParticipantAuth(req);
-  if (participantAuth) {
-    req.participantAuth = participantAuth;
-    return next();
+}
+
+async function requireAdminOrParticipant(req, res, next) {
+  try {
+    const admin = await resolveAdminAuth(req);
+    if (admin) {
+      req.adminAuth = admin;
+      return next();
+    }
+    const participantAuth = await resolveParticipantAuth(req);
+    if (participantAuth) {
+      req.participantAuth = participantAuth;
+      return next();
+    }
+    return res.status(401).json({ error: 'Authentication or valid participant invite token required' });
+  } catch (err) {
+    return next(err);
   }
-  return res.status(401).json({ error: 'Authentication or valid participant invite token required' });
 }
 
 function setAdminCookie(req, res, rawToken) {
@@ -191,29 +190,42 @@ app.get('/api/time', (req, res) => {
   });
 });
 
-app.get('/api/auth/me', (req, res) => {
-  const admin = resolveAdminAuth(req);
-  if (admin) {
-    return res.json({
-      authenticated: true,
-      role: 'admin',
-      username: admin.username,
-      mustChangePassword: admin.mustChangePassword
-    });
+app.get('/api/health', async (_req, res) => {
+  try {
+    await db.ping();
+    res.json({ ok: true, ...db.getStorageInfo(), serverTime: Date.now() });
+  } catch {
+    res.status(503).json({ ok: false, error: 'Database unavailable' });
   }
-  const participantAuth = resolveParticipantAuth(req);
-  if (participantAuth) {
-    return res.json({
-      authenticated: true,
-      role: 'participant',
-      session_id: participantAuth.session_id,
-      participant: participantAuth.participant
-    });
-  }
-  return res.json({ authenticated: false });
 });
 
-app.post('/api/auth/login', authLimiter, (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const admin = await resolveAdminAuth(req);
+    if (admin) {
+      return res.json({
+        authenticated: true,
+        role: 'admin',
+        username: admin.username,
+        mustChangePassword: admin.mustChangePassword
+      });
+    }
+    const participantAuth = await resolveParticipantAuth(req);
+    if (participantAuth) {
+      return res.json({
+        authenticated: true,
+        role: 'participant',
+        session_id: participantAuth.session_id,
+        participant: participantAuth.participant
+      });
+    }
+    return res.json({ authenticated: false });
+  } catch (err) {
+    safeServerError(res, err, 'Failed to verify authentication state');
+  }
+});
+
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
@@ -221,13 +233,13 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
-    const user = db.getAdminUser(username);
+    const user = await db.getAdminUser(username);
     if (!user || !verifyPassword(password, user.password_hash, user.salt)) {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
 
     const rawToken = generateToken(32);
-    db.createAdminSession(hashToken(rawToken), user.username, TOKEN_TTL_MS);
+    await db.createAdminSession(hashToken(rawToken), user.username, TOKEN_TTL_MS);
     setAdminCookie(req, res, rawToken);
 
     res.json({
@@ -241,11 +253,11 @@ app.post('/api/auth/login', authLimiter, (req, res) => {
   }
 });
 
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
   try {
-    const admin = resolveAdminAuth(req);
+    const admin = await resolveAdminAuth(req);
     if (admin?.rawSid) {
-      db.deleteAdminSession(hashToken(admin.rawSid));
+      await db.deleteAdminSession(hashToken(admin.rawSid));
     }
     clearAdminCookie(req, res);
     res.json({ success: true });
@@ -254,7 +266,7 @@ app.post('/api/auth/logout', (req, res) => {
   }
 });
 
-app.post('/api/auth/change-password', requireAdmin, authLimiter, (req, res) => {
+app.post('/api/auth/change-password', requireAdmin, authLimiter, async (req, res) => {
   try {
     const currentPassword = typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
     const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
@@ -263,13 +275,13 @@ app.post('/api/auth/change-password', requireAdmin, authLimiter, (req, res) => {
       return res.status(400).json({ error: 'New password must be between 8 and 128 characters' });
     }
 
-    const user = db.getAdminUser(req.adminAuth.username);
+    const user = await db.getAdminUser(req.adminAuth.username);
     if (!user || !verifyPassword(currentPassword, user.password_hash, user.salt)) {
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
 
     const { hash, salt } = hashPassword(newPassword);
-    db.updateAdminPassword(user.username, hash, salt);
+    await db.updateAdminPassword(user.username, hash, salt);
 
     res.json({ success: true, mustChangePassword: false });
   } catch (err) {
@@ -304,14 +316,14 @@ app.get('/api/network-info', requireAdmin, (req, res) => {
   });
 });
 
-app.get('/api/config', requireAdminOrParticipant, (req, res) => {
+app.get('/api/config', requireAdminOrParticipant, async (req, res) => {
   try {
     const requestedSessionId = req.participantAuth
       ? req.participantAuth.session_id
       : (typeof req.query?.session === 'string' && req.query.session.trim() ? req.query.session.trim() : null);
 
     if (requestedSessionId) {
-      const session = db.getSession(requestedSessionId);
+      const session = await db.getSession(requestedSessionId);
       if (session) {
         const snapshot = parseSessionSnapshot(session);
         return res.json({
@@ -334,7 +346,7 @@ app.get('/api/config', requireAdminOrParticipant, (req, res) => {
       : null;
 
     if (requestedEnvId) {
-      const env = db.getEnvironment(requestedEnvId);
+      const env = await db.getEnvironment(requestedEnvId);
       if (!env) return res.status(404).json({ error: 'Environment not found' });
       return res.json({
         valid: true,
@@ -357,22 +369,26 @@ app.get('/api/config', requireAdminOrParticipant, (req, res) => {
   }
 });
 
-app.post('/api/config/reload', requireAdmin, apiWriteLimiter, (req, res) => {
-  cachedConfig = loadAndValidateConfig();
-  if (cachedConfig.valid) {
-    db.ensureDefaultEnvironment(cachedConfig.hash, cachedConfig.snapshot);
+app.post('/api/config/reload', requireAdmin, apiWriteLimiter, async (req, res) => {
+  try {
+    cachedConfig = loadAndValidateConfig();
+    if (cachedConfig.valid) {
+      await db.ensureDefaultEnvironment(cachedConfig.hash, cachedConfig.snapshot);
+    }
+    res.json({
+      message: 'Configuration reloaded',
+      ...cachedConfig
+    });
+  } catch (err) {
+    safeServerError(res, err, 'Failed to reload configuration');
   }
-  res.json({
-    message: 'Configuration reloaded',
-    ...cachedConfig
-  });
 });
 
 // ==========================================================================
 // 2B. ENVIRONMENTS API (Admin only)
 // ==========================================================================
 
-function createAndStoreEnvironmentFromInput(rawInput, fallbackName) {
+async function createAndStoreEnvironmentFromInput(rawInput, fallbackName) {
   const normalized = parseEnvironmentImportPayload(rawInput, fallbackName);
   const built = buildEnvironmentConfig(normalized);
   if (!built.valid) {
@@ -384,7 +400,7 @@ function createAndStoreEnvironmentFromInput(rawInput, fallbackName) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 32) || 'env';
   const envId = `env_${slug}_${crypto.randomBytes(3).toString('hex')}`;
-  const created = db.createEnvironment({
+  const created = await db.createEnvironment({
     id: envId,
     name: built.name,
     description: built.description,
@@ -394,17 +410,17 @@ function createAndStoreEnvironmentFromInput(rawInput, fallbackName) {
   return { valid: true, created, warnings: built.warnings };
 }
 
-app.get('/api/environments', requireAdmin, (req, res) => {
+app.get('/api/environments', requireAdmin, async (req, res) => {
   try {
-    res.json(db.listEnvironments());
+    res.json(await db.listEnvironments());
   } catch (err) {
     safeServerError(res, err, 'Failed to list environments');
   }
 });
 
-app.post('/api/environments', requireAdmin, apiWriteLimiter, (req, res) => {
+app.post('/api/environments', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
-    const result = createAndStoreEnvironmentFromInput(req.body);
+    const result = await createAndStoreEnvironmentFromInput(req.body);
     if (!result.valid) {
       return res.status(400).json({
         error: result.built.errors.join('; '),
@@ -418,10 +434,10 @@ app.post('/api/environments', requireAdmin, apiWriteLimiter, (req, res) => {
   }
 });
 
-app.post('/api/environments/import', requireAdmin, apiWriteLimiter, (req, res) => {
+app.post('/api/environments/import', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
     const fallbackName = typeof req.body?.name === 'string' ? req.body.name : 'Imported Environment';
-    const result = createAndStoreEnvironmentFromInput(req.body, fallbackName);
+    const result = await createAndStoreEnvironmentFromInput(req.body, fallbackName);
     if (!result.valid) {
       return res.status(400).json({
         error: result.built.errors.join('; '),
@@ -435,9 +451,9 @@ app.post('/api/environments/import', requireAdmin, apiWriteLimiter, (req, res) =
   }
 });
 
-app.get('/api/environments/:id/export.json', requireAdmin, (req, res) => {
+app.get('/api/environments/:id/export.json', requireAdmin, async (req, res) => {
   try {
-    const env = db.getEnvironment(req.params.id);
+    const env = await db.getEnvironment(req.params.id);
     if (!env) return res.status(404).json({ error: 'Environment not found' });
     const exportObj = buildEnvironmentExportPayload(env);
     const safeFileSlug = (env.name || env.id || 'environment')
@@ -453,14 +469,14 @@ app.get('/api/environments/:id/export.json', requireAdmin, (req, res) => {
   }
 });
 
-app.delete('/api/environments/:id', requireAdmin, apiWriteLimiter, (req, res) => {
+app.delete('/api/environments/:id', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
-    const env = db.getEnvironment(req.params.id);
+    const env = await db.getEnvironment(req.params.id);
     if (!env) return res.status(404).json({ error: 'Environment not found' });
     if (env.is_default) {
       return res.status(400).json({ error: 'The built-in default environment cannot be deleted' });
     }
-    db.deleteEnvironment(env.id);
+    await db.deleteEnvironment(env.id);
     res.json({ success: true, id: env.id });
   } catch (err) {
     safeServerError(res, err, 'Failed to delete environment');
@@ -471,37 +487,37 @@ app.delete('/api/environments/:id', requireAdmin, apiWriteLimiter, (req, res) =>
 // 3. SESSIONS API
 // ==========================================================================
 
-app.get('/api/sessions', requireAdminOrParticipant, (req, res) => {
+app.get('/api/sessions', requireAdminOrParticipant, async (req, res) => {
   try {
     if (req.participantAuth) {
-      const s = db.getSession(req.participantAuth.session_id);
+      const s = await db.getSession(req.participantAuth.session_id);
       if (!s) return res.json([]);
       const { config_snapshot: _omit, ...safeSession } = s;
       return res.json([safeSession]);
     }
-    const list = db.listSessions();
+    const list = await db.listSessions();
     res.json(list);
   } catch (err) {
     safeServerError(res, err, 'Failed to list sessions');
   }
 });
 
-app.get('/api/sessions/summary', requireAdmin, (req, res) => {
+app.get('/api/sessions/summary', requireAdmin, async (req, res) => {
   try {
-    const summary = db.getSessionSummaries();
+    const summary = await db.getSessionSummaries();
     res.json(summary);
   } catch (err) {
     safeServerError(res, err, 'Failed to load session summaries');
   }
 });
 
-app.post('/api/sessions', requireAdmin, apiWriteLimiter, (req, res) => {
+app.post('/api/sessions', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
     const sessCheck = validateSessionId(req.body?.id);
     if (!sessCheck.valid) {
       return res.status(400).json({ error: sessCheck.error });
     }
-    if (db.getSession(sessCheck.value)) {
+    if (await db.getSession(sessCheck.value)) {
       return res.status(409).json({ error: `Session "${sessCheck.value}" already exists` });
     }
     const timezone = typeof req.body?.timezone === 'string' && req.body.timezone.trim()
@@ -518,7 +534,7 @@ app.post('/api/sessions', requireAdmin, apiWriteLimiter, (req, res) => {
     let envName = 'Default Smart House';
 
     if (requestedEnvId) {
-      const env = db.getEnvironment(requestedEnvId);
+      const env = await db.getEnvironment(requestedEnvId);
       if (!env || !env.snapshot) {
         return res.status(404).json({ error: `Environment "${requestedEnvId}" not found` });
       }
@@ -528,28 +544,32 @@ app.post('/api/sessions', requireAdmin, apiWriteLimiter, (req, res) => {
       envName = env.name;
     }
 
-    const session = db.createSession(sessCheck.value, envHash, envSnapshot, timezone, envId, envName);
+    const session = await db.createSession(sessCheck.value, envHash, envSnapshot, timezone, envId, envName);
     const roles = envSnapshot?.roles || ['Person_A', 'Person_B', 'Person_C'];
-    const tokens = db.ensureParticipantTokens(session.id, roles);
+    const tokens = await db.ensureParticipantTokens(session.id, roles);
     res.status(201).json({ ...session, participantTokens: tokens });
   } catch (err) {
     safeServerError(res, err, 'Failed to create session');
   }
 });
 
-app.get('/api/sessions/:id', requireAdminOrParticipant, (req, res) => {
-  if (req.participantAuth && req.participantAuth.session_id !== req.params.id) {
-    return res.status(403).json({ error: 'Access denied to this session' });
+app.get('/api/sessions/:id', requireAdminOrParticipant, async (req, res) => {
+  try {
+    if (req.participantAuth && req.participantAuth.session_id !== req.params.id) {
+      return res.status(403).json({ error: 'Access denied to this session' });
+    }
+    const session = await db.getSession(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    const { config_snapshot: _omit, ...safeSession } = session;
+    res.json(safeSession);
+  } catch (err) {
+    safeServerError(res, err, 'Failed to fetch session');
   }
-  const session = db.getSession(req.params.id);
-  if (!session) return res.status(404).json({ error: 'Session not found' });
-  const { config_snapshot: _omit, ...safeSession } = session;
-  res.json(safeSession);
 });
 
-app.get('/api/sessions/:id/participant-links', requireAdmin, (req, res) => {
+app.get('/api/sessions/:id/participant-links', requireAdmin, async (req, res) => {
   try {
-    const session = db.getSession(req.params.id);
+    const session = await db.getSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     let snap = cachedConfig.snapshot;
     try {
@@ -558,16 +578,16 @@ app.get('/api/sessions/:id/participant-links', requireAdmin, (req, res) => {
       // fallback to active config
     }
     const roles = snap?.roles || ['Person_A', 'Person_B', 'Person_C'];
-    const tokens = db.ensureParticipantTokens(session.id, roles);
+    const tokens = await db.ensureParticipantTokens(session.id, roles);
     res.json({ session_id: session.id, tokens });
   } catch (err) {
     safeServerError(res, err, 'Failed to generate participant links');
   }
 });
 
-app.post('/api/sessions/:id/start', requireAdmin, apiWriteLimiter, (req, res) => {
+app.post('/api/sessions/:id/start', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
-    const session = db.startSession(req.params.id);
+    const session = await db.startSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     res.json({ message: 'Session started', session });
   } catch (err) {
@@ -575,9 +595,9 @@ app.post('/api/sessions/:id/start', requireAdmin, apiWriteLimiter, (req, res) =>
   }
 });
 
-app.post('/api/sessions/:id/stop', requireAdmin, apiWriteLimiter, (req, res) => {
+app.post('/api/sessions/:id/stop', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
-    const session = db.stopSession(req.params.id);
+    const session = await db.stopSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     res.json({ message: 'Session stopped', session });
   } catch (err) {
@@ -585,9 +605,9 @@ app.post('/api/sessions/:id/stop', requireAdmin, apiWriteLimiter, (req, res) => 
   }
 });
 
-app.post('/api/sessions/:id/end', requireAdmin, apiWriteLimiter, (req, res) => {
+app.post('/api/sessions/:id/end', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
-    const session = db.stopSession(req.params.id);
+    const session = await db.stopSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     res.json({ message: 'Session ended', session });
   } catch (err) {
@@ -595,9 +615,9 @@ app.post('/api/sessions/:id/end', requireAdmin, apiWriteLimiter, (req, res) => {
   }
 });
 
-app.delete('/api/sessions/:id', requireAdmin, apiWriteLimiter, (req, res) => {
+app.delete('/api/sessions/:id', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
-    db.deleteSession(req.params.id);
+    await db.deleteSession(req.params.id);
     res.json({ success: true, message: `Session ${req.params.id} deleted` });
   } catch (err) {
     safeServerError(res, err, 'Failed to delete session');
@@ -605,12 +625,12 @@ app.delete('/api/sessions/:id', requireAdmin, apiWriteLimiter, (req, res) => {
 });
 
 // Quick Test Annotation Generator (Admin only)
-app.post('/api/test/generate-annotation', requireAdmin, apiWriteLimiter, (req, res) => {
+app.post('/api/test/generate-annotation', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
     const { session_id, participant, location_id, activity_id, interaction, other_person } = req.body || {};
     const sId = typeof session_id === 'string' && session_id.trim() ? session_id.trim() : '';
     if (!sId) return res.status(400).json({ error: 'session_id is required' });
-    const session = db.getSession(sId);
+    const session = await db.getSession(sId);
     if (!session) return res.status(404).json({ error: `Session "${sId}" not found` });
 
     const snap = parseSessionSnapshot(session);
@@ -647,7 +667,7 @@ app.post('/api/test/generate-annotation', requireAdmin, apiWriteLimiter, (req, r
       return res.status(400).json({ error: validation.error });
     }
 
-    const result = db.saveAnnotation({
+    const result = await db.saveAnnotation({
       ...validation.data,
       config_version: session.config_hash || cachedConfig.hash
     });
@@ -658,15 +678,15 @@ app.post('/api/test/generate-annotation', requireAdmin, apiWriteLimiter, (req, r
   }
 });
 
-// Collaborator Exclusivity Locks API (persistent lock policy in SQLite)
-app.get('/api/sessions/:id/locks', requireAdminOrParticipant, (req, res) => {
+// Collaborator Exclusivity Locks API (persistent lock policy in DB)
+app.get('/api/sessions/:id/locks', requireAdminOrParticipant, async (req, res) => {
   try {
     if (req.participantAuth && req.participantAuth.session_id !== req.params.id) {
       return res.status(403).json({ error: 'Access denied to this session' });
     }
-    const session = db.getSession(req.params.id);
+    const session = await db.getSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
-    const locks = db.getSessionLocks(req.params.id);
+    const locks = await db.getSessionLocks(req.params.id);
     res.json({
       session_id: req.params.id,
       strictSessionLock: Boolean(session.strict_session_lock),
@@ -677,23 +697,23 @@ app.get('/api/sessions/:id/locks', requireAdminOrParticipant, (req, res) => {
   }
 });
 
-app.post('/api/sessions/:id/locks/release', requireAdmin, apiWriteLimiter, (req, res) => {
+app.post('/api/sessions/:id/locks/release', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
     const { taken_person } = req.body || {};
     const locks = taken_person
-      ? db.releaseLock(req.params.id, String(taken_person).trim())
-      : db.releaseAllLocks(req.params.id);
+      ? await db.releaseLock(req.params.id, String(taken_person).trim())
+      : await db.releaseAllLocks(req.params.id);
     res.json({ success: true, locks });
   } catch (err) {
     safeServerError(res, err, 'Failed to release lock');
   }
 });
 
-app.post('/api/sessions/:id/lock-policy', requireAdmin, apiWriteLimiter, (req, res) => {
+app.post('/api/sessions/:id/lock-policy', requireAdmin, apiWriteLimiter, async (req, res) => {
   try {
-    const session = db.getSession(req.params.id);
+    const session = await db.getSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Session not found' });
-    const strict = db.setSessionLockPolicy(req.params.id, Boolean(req.body?.strictSessionLock));
+    const strict = await db.setSessionLockPolicy(req.params.id, Boolean(req.body?.strictSessionLock));
     res.json({
       session_id: req.params.id,
       strictSessionLock: strict
@@ -707,18 +727,18 @@ app.post('/api/sessions/:id/lock-policy', requireAdmin, apiWriteLimiter, (req, r
 // 4. ANNOTATIONS INGESTION (Authenticated & Strictly Validated)
 // ==========================================================================
 
-app.get('/api/annotations', requireAdmin, (req, res) => {
+app.get('/api/annotations', requireAdmin, async (req, res) => {
   try {
     const { session_id, participant } = req.query;
     if (!session_id) return res.status(400).json({ error: 'session_id query param is required' });
-    const rows = db.getAnnotations(String(session_id), participant ? String(participant) : null);
+    const rows = await db.getAnnotations(String(session_id), participant ? String(participant) : null);
     res.json(rows);
   } catch (err) {
     safeServerError(res, err, 'Failed to load annotations');
   }
 });
 
-app.post('/api/annotations', requireAdminOrParticipant, apiWriteLimiter, (req, res) => {
+app.post('/api/annotations', requireAdminOrParticipant, apiWriteLimiter, async (req, res) => {
   try {
     const rawBody = { ...(req.body || {}) };
     let verifiedParticipant = null;
@@ -737,7 +757,7 @@ app.post('/api/annotations', requireAdminOrParticipant, apiWriteLimiter, (req, r
       return res.status(400).json({ error: sessCheck.error });
     }
 
-    const session = db.getSession(sessCheck.value);
+    const session = await db.getSession(sessCheck.value);
     if (!session) {
       return res.status(404).json({ error: `Session "${sessCheck.value}" not found` });
     }
@@ -754,7 +774,7 @@ app.post('/api/annotations', requireAdminOrParticipant, apiWriteLimiter, (req, r
       return res.status(400).json({ error: validation.error });
     }
 
-    const { row, isDuplicate } = db.saveAnnotation({
+    const { row, isDuplicate } = await db.saveAnnotation({
       ...validation.data,
       config_version: session.config_hash || cachedConfig.hash,
       keep_session_lock: Boolean(session.strict_session_lock)
@@ -764,7 +784,7 @@ app.post('/api/annotations', requireAdminOrParticipant, apiWriteLimiter, (req, r
       success: true,
       isDuplicate,
       annotation: row,
-      locks: db.getSessionLocks(session.id)
+      locks: await db.getSessionLocks(session.id)
     });
   } catch (err) {
     safeServerError(res, err, 'Failed to save annotation');
@@ -775,7 +795,7 @@ app.post('/api/annotations', requireAdminOrParticipant, apiWriteLimiter, (req, r
 // 5. SMARTWATCH BLE SENSOR CHUNKS & HEARTBEAT
 // ==========================================================================
 
-app.post('/api/ble/sensor-chunks', requireAdminOrParticipant, bleStreamLimiter, (req, res) => {
+app.post('/api/ble/sensor-chunks', requireAdminOrParticipant, bleStreamLimiter, async (req, res) => {
   try {
     const rawBody = { ...(req.body || {}) };
     let verifiedParticipant = null;
@@ -788,7 +808,7 @@ app.post('/api/ble/sensor-chunks', requireAdminOrParticipant, bleStreamLimiter, 
     const sessCheck = validateSessionId(rawBody.session_id);
     if (!sessCheck.valid) return res.status(400).json({ error: sessCheck.error });
 
-    const session = db.getSession(sessCheck.value);
+    const session = await db.getSession(sessCheck.value);
     if (!session) return res.status(404).json({ error: 'Session not found' });
     if (session.status !== 'active') {
       return res.status(409).json({ error: 'Cannot ingest telemetry for a stopped session' });
@@ -800,14 +820,14 @@ app.post('/api/ble/sensor-chunks', requireAdminOrParticipant, bleStreamLimiter, 
       return res.status(400).json({ error: validation.error });
     }
 
-    db.saveSensorChunk(validation.data);
+    await db.saveSensorChunk(validation.data);
     res.status(201).json({ success: true, chunk_uuid: validation.data.chunk_uuid });
   } catch (err) {
     safeServerError(res, err, 'Failed to store sensor chunk');
   }
 });
 
-app.post('/api/ble/heartbeat', requireAdminOrParticipant, bleStreamLimiter, (req, res) => {
+app.post('/api/ble/heartbeat', requireAdminOrParticipant, bleStreamLimiter, async (req, res) => {
   try {
     const body = req.body || {};
     const deviceId = typeof body.device_id === 'string' ? body.device_id.trim() : '';
@@ -819,7 +839,7 @@ app.post('/api/ble/heartbeat', requireAdminOrParticipant, bleStreamLimiter, (req
       ? req.participantAuth.session_id
       : (typeof body.session_id === 'string' ? body.session_id.trim() : null);
 
-    if (sessionId && !db.getSession(sessionId)) {
+    if (sessionId && !(await db.getSession(sessionId))) {
       return res.status(404).json({ error: 'Session not found' });
     }
 
@@ -831,7 +851,7 @@ app.post('/api/ble/heartbeat', requireAdminOrParticipant, bleStreamLimiter, (req
       ? Math.max(0, Math.min(100, Math.round(Number(body.battery_level))))
       : 100;
 
-    db.updateWearableStatus({
+    await db.updateWearableStatus({
       device_id: deviceId,
       session_id: sessionId,
       participant,
@@ -846,9 +866,9 @@ app.post('/api/ble/heartbeat', requireAdminOrParticipant, bleStreamLimiter, (req
   }
 });
 
-app.get('/api/ble/devices', requireAdmin, (req, res) => {
+app.get('/api/ble/devices', requireAdmin, async (req, res) => {
   try {
-    res.json(db.listWearables());
+    res.json(await db.listWearables());
   } catch (err) {
     safeServerError(res, err, 'Failed to list wearable devices');
   }
@@ -858,7 +878,7 @@ app.get('/api/ble/devices', requireAdmin, (req, res) => {
 // 6. CSV EXPORT (Admin only, single participant or entire session)
 // ==========================================================================
 
-app.get('/api/sessions/:id/export.csv', requireAdmin, (req, res) => {
+app.get('/api/sessions/:id/export.csv', requireAdmin, async (req, res) => {
   try {
     const sessCheck = validateSessionId(req.params.id);
     if (!sessCheck.valid) return res.status(400).json({ error: sessCheck.error });
@@ -869,11 +889,11 @@ app.get('/api/sessions/:id/export.csv', requireAdmin, (req, res) => {
       return res.status(400).json({ error: 'Invalid participant filter' });
     }
 
-    const session = db.getSession(sessionId);
+    const session = await db.getSession(sessionId);
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
     const timeZone = session.timezone || 'Europe/Paris';
-    const rows = db.getAnnotations(sessionId, participant);
+    const rows = await db.getAnnotations(sessionId, participant);
     const csvContent = generateAnnotationsCsv(rows, timeZone);
 
     const filename = participant
@@ -911,20 +931,38 @@ app.use((err, req, res, _next) => {
   return safeServerError(res, err);
 });
 
-// Optional HTTPS/TLS listener when SSL_CERT_PATH & SSL_KEY_PATH are provided
-const certPath = process.env.SSL_CERT_PATH;
-const keyPath = process.env.SSL_KEY_PATH;
+// Initialize persistent database storage before opening the HTTP listener
+async function startServer() {
+  await db.init();
+  if (cachedConfig.valid) {
+    await db.ensureDefaultEnvironment(cachedConfig.hash, cachedConfig.snapshot);
+  }
 
-if (certPath && keyPath && fs.existsSync(certPath) && fs.existsSync(keyPath)) {
-  const tlsOpts = {
-    cert: fs.readFileSync(certPath),
-    key: fs.readFileSync(keyPath)
-  };
-  https.createServer(tlsOpts, app).listen(PORT, '0.0.0.0', () => {
-    console.log(`[SmartHouse Server] HTTPS API running on https://localhost:${PORT}`);
-  });
-} else {
-  http.createServer(app).listen(PORT, '0.0.0.0', () => {
-    console.log(`[SmartHouse Server] API running on http://localhost:${PORT}`);
+  const certPath = process.env.SSL_CERT_PATH;
+  const keyPath = process.env.SSL_KEY_PATH;
+
+  if (certPath && keyPath && fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+    const tlsOpts = {
+      cert: fs.readFileSync(certPath),
+      key: fs.readFileSync(keyPath)
+    };
+    return new Promise(resolve => {
+      const server = https.createServer(tlsOpts, app).listen(PORT, '0.0.0.0', () => {
+        console.log(`[SmartHouse Server] HTTPS API running on https://localhost:${PORT}`);
+        resolve(server);
+      });
+    });
+  }
+
+  return new Promise(resolve => {
+    const server = http.createServer(app).listen(PORT, '0.0.0.0', () => {
+      console.log(`[SmartHouse Server] API running on http://localhost:${PORT}`);
+      resolve(server);
+    });
   });
 }
+
+startServer().catch(err => {
+  console.error('[SmartHouse Server] Fatal startup failure:', err);
+  process.exit(1);
+});

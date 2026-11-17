@@ -1,3 +1,9 @@
+databases:
+  - name: smarthouse-db
+    databaseName: smarthouse_studio
+    user: smarthouse_user
+    plan: free
+
 services:
   - type: web
     name: smarthouse-studio
@@ -13,11 +19,7 @@ services:
         value: admin
       - key: ADMIN_PASSWORD
         sync: false
-      # Optional: mount a Render Persistent Disk on Starter+ plans and set DATA_DIR=/var/data
-      # - key: DATA_DIR
-      #   value: /var/data
-    # Persistent disk requires a paid Render plan (Starter+):
-    # disk:
-    #   name: smarthouse-data
-    #   mountPath: /var/data
-    #   sizeGB: 1
+      - key: DATABASE_URL
+        fromDatabase:
+          name: smarthouse-db
+          property: connectionString

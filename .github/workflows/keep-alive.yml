@@ -1,0 +1,16 @@
+name: Keep Render Web Service Warm
+
+on:
+  schedule:
+    # Ping every 10 minutes to reduce 15-minute free-tier idle spin-downs
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: |
+          curl -fsS --max-time 30 https://smarthouse-studio.onrender.com/api/health || \
+          curl -fsS --max-time 30 https://smarthouse-studio.onrender.com/api/time
